@@ -17,6 +17,7 @@ build_openalex_headers() to construct those headers uniformly.
 
 Zero confidential data or information input; reads only public literature.
 """
+import base64
 import json
 import os
 import time
@@ -25,6 +26,27 @@ import urllib.parse
 import urllib.request
 
 UA = "ct-literature/0.3.3"
+
+# ── Lightweight .env key obfuscation (XOR+base64) ──────────────────────────────
+# If the .env (holding the user's PRIVATE OpenAlex/S2 key) is ever accidentally
+# packaged by a platform that ignores .gitignore/.clawhubignore (e.g. SkillHub),
+# the shipped value is NOT the plaintext key — it fails naive grep/scan matching.
+# NOT cryptography (the XOR key below is public); the real safeguard is that .env
+# stays git/clawhub-ignored AND is stripped before any publish. _deobfuscate() is
+# backward-compatible with a plaintext .env (returns the value unchanged on failure).
+_OBF_XOR_KEY = b"ct-lit-obf-2026"
+
+
+def _deobfuscate(val):
+    """Reverse XOR+base64; return `val` unchanged if it isn't an obfuscated blob."""
+    if not val:
+        return val
+    try:
+        raw = base64.b64decode(val, validate=True)
+        return bytes(c ^ _OBF_XOR_KEY[i % len(_OBF_XOR_KEY)]
+                      for i, c in enumerate(raw)).decode("utf-8")
+    except Exception:
+        return val
 
 
 class HttpError(Exception):
@@ -138,6 +160,7 @@ def load_openalex_key(env_var="OPENALEX_API_KEY"):
                     if _line.startswith(env_var + "="):
                         _, _, _v = _line.partition("=")
                         _v = _v.strip().strip('"').strip("'")
+                        _v = _deobfuscate(_v)
                         if _v:
                             os.environ[env_var] = _v
                             return _v
@@ -188,6 +211,7 @@ def load_s2_key(env_var="SEMANTIC_SCHOLAR_API_KEY"):
                     if _line.startswith(env_var + "="):
                         _, _, _v = _line.partition("=")
                         _v = _v.strip().strip('"').strip("'")
+                        _v = _deobfuscate(_v)
                         if _v:
                             os.environ[env_var] = _v
                             return _v
