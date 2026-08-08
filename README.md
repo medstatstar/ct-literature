@@ -218,7 +218,7 @@ python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir .
 
 ---
 
-**Version**: v0.5.2 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.5.3 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, feel free to contact the author directly at medstatstar@gmail.com (Wintone Zhang / 张文彤).
 

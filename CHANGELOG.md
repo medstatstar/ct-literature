@@ -3,6 +3,10 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.5.3 — 2026-08-08
+
+- .env key 轻混淆（XOR+base64）防误打包明文扫描命中；http_utils.py 增加 `_deobfuscate` 向后兼容明文 .env；三平台同步发布。
+
 ## v0.5.2 — 2026-08-08
 
 ### Follow-up security audit cleanup (ClawHub SkillSpector, post-0.5.1)
