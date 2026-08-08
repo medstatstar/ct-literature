@@ -27,4 +27,4 @@
 
 ## Version
 
-Current: v0.5.1 (B-tier public-intel literature search skill; aligned with SKILL.md).
+Current: v0.5.2 (B-tier public-intel literature search skill; aligned with SKILL.md).

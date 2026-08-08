@@ -59,12 +59,12 @@ Also pull MEDLINE via Europe PMC and citation-rank via Semantic Scholar.
 **Assistant replies (sketch):**
 Adding `--with-europepmc` (MeSH precision) and `--with-semantic-scholar` (citation ranking). S2 is skipped automatically if no key or on 429 — OpenAlex + Europe PMC still produce results.
 
-### Example 4 · Configure the OpenAlex key (conversational)
+### Example 4 · Configure the OpenAlex key (self-config)
 **You say:**
 How do I lift the 100/day limit for large searches?
 
 **Assistant replies (sketch):**
-Apply for a free key (~30s) at <https://openalex.org/settings/api>, then just paste the key to me — I'll write it into `ct-literature/.env` for you. No manual file editing. (Recommended over `--openalex-key` / env var because it survives reruns with zero extra flags.)
+Apply for a free key (~30s) at <https://openalex.org/settings/api>, then configure it yourself — pick any one of three ways (the skill never asks you to paste a key into chat): (a) add `OPENALEX_API_KEY=<key>` to `ct-literature/.env`; (b) export it as an environment variable `OPENALEX_API_KEY`; or (c) pass `--openalex-key <key>` on the command line. The key is stored locally and sent only over HTTPS to the official OpenAlex API.
 
 ### Example 5 · Get the Excel deliverable
 **You say:**
@@ -218,7 +218,7 @@ python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir .
 
 ---
 
-**Version**: v0.5.1 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.5.2 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, feel free to contact the author directly at medstatstar@gmail.com (Wintone Zhang / 张文彤).
 

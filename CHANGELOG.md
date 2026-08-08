@@ -3,6 +3,22 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.5.2 — 2026-08-08
+
+### Follow-up security audit cleanup (ClawHub SkillSpector, post-0.5.1)
+- **Closed the residual Ssd3 (paste-key-to-chat) finding**: v0.5.1 removed the
+  "paste your key to the assistant" prompt from `scripts/i18n.py`, but the same
+  guidance was still present in README "Example 4 · Configure the OpenAlex key"
+  (both `README.md` and `README_zh-CN.md`). Rewrote both to self-config only —
+  `.env` / env var / `--openalex-key` — with an explicit "never paste a key into
+  chat" statement. This was the true source of the 98%-confidence Ssd3 hit
+  (the scanner reads the README, not just scripts).
+- **Cleared the Unpinned Dependencies (Low) finding**: `requirements.txt` no
+  longer declares `requests>=2.28`. `requests` is not a runtime dependency —
+  fetch uses stdlib `urllib`, and the R-bridge (`r_libs.py`) was removed in
+  0.5.1. The reserved optional `requests` import in `fetch_openalex.py` is noted
+  with a pin-if-enabled comment.
+
 ## v0.5.1 — 2026-08-08
 
 ### Security audit remediation (ClawHub SkillSpector, post-0.5.0)

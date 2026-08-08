@@ -59,12 +59,12 @@ ct-literature 是一个**对话式技能**：你只要把想查的内容告诉�
 **助手会这样回（示意）：**
 加上 `--with-europepmc`（MeSH 精准）与 `--with-semantic-scholar`（引用排序）。S2 在无 key 或 429 时自动跳过 —— OpenAlex + Europe PMC 仍正常产出。
 
-### 示例 4 · 配置 OpenAlex key（对话式）
+### 示例 4 · 配置 OpenAlex key（自行配置）
 **你这样说：**
 大规模检索怎么突破 100/天的限额？
 
 **助手会这样回（示意）：**
-在 <https://openalex.org/settings/api> 申请免费 key（约 30 秒），然后把 key 直接发给我 —— 我会帮你写入 `ct-literature/.env`。无需手动编辑文件。（比 `--openalex-key` / 环境变量更推荐，因为后续重跑零额外参数。）
+在 <https://openalex.org/settings/api> 申请免费 key（约 30 秒），然后自行配置即可——技能**绝不要求你把 key 粘进对话**。三种方式任选其一：(a) 在 `ct-literature/.env` 加一行 `OPENALEX_API_KEY=<key>`；(b) 设为环境变量 `OPENALEX_API_KEY`；(c) 命令行传 `--openalex-key <key>`。key 仅本地存储，只通过 HTTPS 发往官方 OpenAlex API。
 
 ### 示例 5 · 拿 Excel 交付物
 **你这样说：**
@@ -218,7 +218,7 @@ python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir .
 
 ---
 
-**版本**：v0.5.1 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+**版本**：v0.5.2 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：medstatstar@gmail.com（张文彤 / Wintone Zhang）。
 
