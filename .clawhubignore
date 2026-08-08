@@ -1,0 +1,14 @@
+# ── Secrets: never ship the user's real API key with the published package ──
+# OpenAlex key lives in .env (gitignored). ClawHub packaging must NOT transfer it.
+.env
+.env.*
+!.env.example
+
+# ── Local build / test artifacts (keep the package lean) ──
+out_*/
+tests/out/
+tests/results/
+tests/scenario10_run/
+tests/scenario10b_run/
+__pycache__/
+*.pyc

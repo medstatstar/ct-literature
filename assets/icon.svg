@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 104" width="100%">
+  <defs>
+    <filter id="logoShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2.5" stdDeviation="2.5" flood-color="#1C6DD0" flood-opacity="0.30"/>
+    </filter>
+    <marker id="arw" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#1C6DD0"/>
+    </marker>
+  </defs>
+  <rect x="-52" y="-52" width="104" height="104" rx="20" fill="#EEEDFE" stroke="#C5DCF5" stroke-width="0.5" transform="translate(52,52)" filter="url(#logoShadow)"/>
+  <g transform="translate(7,13)">
+    <text font-family="'Arial Black','Helvetica Neue',Arial,sans-serif" font-size="16" font-weight="900" font-style="italic" fill="#1C6DD0" stroke="#1C6DD0" stroke-width="0.25" paint-order="stroke" stroke-linejoin="round">Clinical</text>
+    <text y="12" font-family="'Arial Black','Helvetica Neue',Arial,sans-serif" font-size="16" font-weight="900" font-style="italic" fill="#1C6DD0" stroke="#1C6DD0" stroke-width="0.25" paint-order="stroke" stroke-linejoin="round">Trial</text>
+  </g>
+
+  <!-- 三份堆叠文献文档框（放大 1.2 倍，围绕视觉中心缩放，保持堆叠关系，边框加粗） -->
+  <g transform="translate(50,66) scale(1.2) translate(-50,-66)">
+    <g fill="#EEEDFE" stroke="#1C6DD0" stroke-width="2.8">
+      <rect x="28" y="54" width="40" height="36" rx="3"/>
+      <rect x="32" y="48" width="40" height="36" rx="3"/>
+      <rect x="36" y="42" width="40" height="36" rx="3"/>
+    </g>
+    <g stroke="#AFA9EC" stroke-width="1.6" stroke-linecap="round">
+      <line x1="40" y1="50" x2="70" y2="50"/>
+      <line x1="40" y1="56" x2="70" y2="56"/>
+      <line x1="40" y1="62" x2="70" y2="62"/>
+    </g>
+  </g>
+
+  <!-- 右上角放大镜（向右上方轻移避开放大后的文献框），内嵌白底红十字徽（呼应 ct-advisor 家族） -->
+  <circle cx="76" cy="46" r="13" fill="#9FE1CB" stroke="#1C6DD0" stroke-width="2.5"/>
+  <line x1="85" y1="55" x2="94" y2="64" stroke="#1C6DD0" stroke-width="3" stroke-linecap="round"/>
+  <g transform="translate(76,46)">
+    <circle r="6.5" fill="#FFFFFF" stroke="#1C6DD0" stroke-width="1"/>
+    <rect x="-1.4" y="-4.3" width="2.8" height="8.6" rx="0.7" fill="#E2342E"/>
+    <rect x="-4.3" y="-1.4" width="8.6" height="2.8" rx="0.7" fill="#E2342E"/>
+  </g>
+</svg>

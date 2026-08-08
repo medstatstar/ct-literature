@@ -1,0 +1,6 @@
+# ct-literature runtime dependencies
+# Fetch scripts use the Python standard library (urllib) — no hard dependency.
+# `requests` is used by the copied ct-base common helper (r_libs.py); install if you use R-bridge paths.
+requests>=2.28
+# Optional: matplotlib (future trend charts)
+# matplotlib>=3.5

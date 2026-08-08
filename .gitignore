@@ -1,0 +1,15 @@
+# OpenAlex API key（含凭据，禁止提交到任何远端）
+.env
+
+# 运行产物（中间 JSON / 报告，按需保留）
+out_*/
+
+# 测试 harness 产物
+tests/out/
+tests/results/
+tests/scenario10_run/
+tests/scenario10b_run/
+
+# Python 缓存
+__pycache__/
+*.pyc
