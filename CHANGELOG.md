@@ -3,6 +3,26 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.5.1 — 2026-08-08
+
+### Security audit remediation (ClawHub SkillSpector, post-0.5.0)
+- **Removed API-key paste-to-assistant guidance**: deleted the conversational
+  "paste your key to the assistant" prompts in `scripts/i18n.py`
+  (`openalex.key_notice` / `semantic_scholar.key_notice`) and reverted to the
+  self-service methods in `references/openalex_key.md` (Method A/B/C: `.env`,
+  env var, or `--openalex-key`). Clarified the key is user-private, stored
+  locally, sent only over HTTPS to the official API, and must never be pasted
+  into chat — also resolves an internal contradiction with openalex_key.md §7.
+- **Removed arbitrary R code execution primitive**: `scripts/r_libs.py` no longer
+  imports `run_r` / `subprocess` / `tempfile`; it keeps only validation /
+  sanitization helpers. ct-literature is pure-Python and never calls R, so the
+  "Context-Inappropriate Capability" finding is eliminated at the root. The shared
+  `ct-base/scripts/r_libs.py` was likewise stripped of `run_r` (execution
+  primitives are no longer shared from the base), and `ct-base/BASE.md` §16.4 / §2
+  / §10 references were updated to match.
+- Dropped dead R-related i18n keys (`dry_run.*`, `exec.*`, `install.*`,
+  `header.*`, etc.) that were only referenced by the removed R runner.
+
 ## v0.5.0 — 2026-08-08
 
 ### Initial public release (init version)
