@@ -11,10 +11,15 @@ import argparse
 import json
 import re
 
-# Source priority (lower = higher priority). SemanticScholar is a low-priority
-# supplementary source (its key requires a manual form review and is often absent),
-# so pure-S2 works sink to the bottom; OpenAlex / EuropePMC and multi-source hits rank first.
-_SOURCE_PRIORITY = {"OpenAlex": 0, "EuropePMC": 0, "SemanticScholar": 1}
+# Source priority (lower = higher priority).
+# OpenAlex / EuropePMC / bioRxiv / medRxiv are primary biomedical sources (rank 0);
+# SemanticScholar and arXiv are low-priority supplementary sources (rank 1) — S2's key
+# requires a manual form review and is often absent, and arXiv is mostly methodology
+# breadth rather than core trial/safety evidence.
+_SOURCE_PRIORITY = {
+    "OpenAlex": 0, "EuropePMC": 0, "bioRxiv": 0, "medRxiv": 0,
+    "SemanticScholar": 1, "arXiv": 1,
+}
 
 
 def _norm_title(t):

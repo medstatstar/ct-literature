@@ -162,7 +162,7 @@ Do not mix evidence-status categories into one unlabeled list. Required labels:
 
 ## 9. Cross-database mode in ct-literature
 
-Trigger phrases: "cross-database", "multi-database", "Embase", "Cochrane", "Web of Science", "systematic review search strategy", "PRISMA search", "跨库检索", "多数据库检索", "系统综述检索策略".
+Trigger phrases: "cross-database", "multi-database", "Embase", "Cochrane", "Web of Science", "systematic review search strategy", "PRISMA search" (Chinese trigger phrases are mirrored in SKILL.md `triggers`).
 
 Behaviour in this mode:
 

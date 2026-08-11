@@ -1,5 +1,6 @@
 # OpenAlex API key（含凭据，禁止提交到任何远端）
 .env
+.env.*
 
 # 运行产物（中间 JSON / 报告，按需保留）
 out_*/
@@ -7,8 +8,17 @@ out_*/
 # 测试 harness 产物
 tests/out/
 tests/results/
+tests/smoke_out/
 tests/scenario10_run/
 tests/scenario10b_run/
+
+# 硬化回归脚本（开发产物，不纳入发布包）
+tests/scenario10c.py
+tests/scenario10c_x10.py
+
+# 本地注入/构建元数据（含本机绝对路径，禁止发布）
+.ctbase_injected.json
+*.ctbase_bak_*
 
 # Python 缓存
 __pycache__/

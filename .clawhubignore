@@ -4,11 +4,19 @@
 .env.*
 !.env.example
 
+# ── Local injection / build metadata (machine-specific, never publish) ──
+.ctbase_injected.json
+*.ctbase_bak_*
+
 # ── Local build / test artifacts (keep the package lean) ──
 out_*/
 tests/out/
 tests/results/
+tests/smoke_out/
 tests/scenario10_run/
 tests/scenario10b_run/
+# 硬化回归脚本（开发产物，不纳入发布包）
+tests/scenario10c.py
+tests/scenario10c_x10.py
 __pycache__/
 *.pyc

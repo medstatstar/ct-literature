@@ -3,9 +3,9 @@ slug: ct-literature
 name: ct-literature
 displayName: 临床试验文献检索专家 / Clinical Trial Literature Search
 cn_name: 临床试验文献检索专家
-version: 0.5.4
+version: 0.5.7
 invocable: true
-summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准 + Semantic Scholar 引用增强），归一化合并去重，产出证据基础与 CSM 定性安全性文献集；B 档公开检索，零保密输入。
+summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + Semantic Scholar 引用增强 + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集；B 档公开检索，零保密输入。
 license: MIT
 description: "Search public scholarly literature and normalize it into one de-duplicated evidence base: OpenAlex (primary, free, citation-rich) + Europe PMC (MEDLINE/MeSH, biomedical precision) + Semantic Scholar (citation ranking, optional). Filter by review type, year range, and a safety/CSM bias mode that surfaces published adverse-event / pharmacovigilance literature. Produces JSON + Markdown. Reads only public publications; zero confidential input, B-tier (ordinary input + public retrieval). / 检索公开学术文献并归一化合并为统一去重证据库：OpenAlex（主源，免费、含引用数）+ Europe PMC（MEDLINE/MeSH，生物医学精准）+ Semantic Scholar（引用排序，可选）。按综述类型、年份区间筛选，并提供安全性/CSM 偏置模式以提取已发表不良事件/药物警戒文献。产出 JSON + Markdown。仅读公开文献，零保密数据输入，B 档（普通输入 + 对外检索）。"
 triggers:
@@ -27,7 +27,7 @@ metadata:
 permissions:
   scope: "user-space-only"
   network: "optional"
-  network_note: "Reads only public bibliographic sources: OpenAlex (api.openalex.org, no key), Europe PMC (ebi.ac.uk, MEDLINE/MeSH, no key), Semantic Scholar (api.semanticscholar.org, no key; rate-limited HTTP 429 -> gracefully skipped). No WAF, no confidential input; ordinary input + public retrieval (B-tier)."
+  network_note: "Reads only public bibliographic sources: OpenAlex (api.openalex.org, no key), Europe PMC (ebi.ac.uk, MEDLINE/MeSH, no key; also indexes bioRxiv/medRxiv preprints via SRC:PPR), Semantic Scholar (api.semanticscholar.org, no key; rate-limited HTTP 429 -> gracefully skipped), arXiv (export.arxiv.org/api/query, no key). Europe PMC is ON by default (--no-with-europepmc to disable); bioRxiv/medRxiv/arXiv are opt-in via --with-biorxiv / --with-medrxiv / --with-arxiv. No WAF, no confidential input; ordinary input + public retrieval (B-tier)."
   filesystem: "read-only to its own files; writes report files only to the current working directory"
   data: "no confidential data input; no external transmission of user data"
 
@@ -68,10 +68,13 @@ The four B-tier public-intel skills are complementary, each answering a differen
 | Source | Access | Status | Role |
 |---|---|---|---|
 | OpenAlex | Public REST; free key recommended (100k/day via `.env` auto-load) — keyless capped at 100/day since 2026-02-13 | Required (primary) | Broad coverage + citation counts |
-| Europe PMC | Public REST (MEDLINE / PubMed Central), no key, MeSH-indexed | Optional `--with-europepmc` | Biomedical precision + MeSH terms |
+| Europe PMC | Public REST (MEDLINE / PubMed Central), no key, MeSH-indexed | **Default ON** (`--no-with-europepmc` to disable) | Biomedical precision + MeSH terms |
 | Semantic Scholar | Public Graph API, no key, rate-limited (HTTP 429) | Optional `--with-semantic-scholar` | Citation-aware ranking; degrades gracefully to empty on 429 |
+| bioRxiv | Via Europe PMC `SRC:PPR` + `publisher:bioRxiv` (no standalone keyword API) | Optional `--with-biorxiv` | Biomedical preprints (Tier P) |
+| medRxiv | Via Europe PMC `SRC:PPR` + `publisher:medRxiv` | Optional `--with-medrxiv` | Medical/clinical preprints (Tier P) |
+| arXiv | Public Atom API (`export.arxiv.org/api/query`), no key | Optional `--with-arxiv` | Physics/CS/ML methodology breadth (opt-in supplementary) |
 
-> All three are public bibliographic APIs — no WAF. OpenAlex requires an API key since 2026-02-13: keyless traffic is throttled to 100 credits/day; a free key lifts this to 100k/day. Provide via `--openalex-key` or env `OPENALEX_API_KEY`; ct-literature also keeps the polite-pool `mailto`. Semantic Scholar may return HTTP 429 without a key — ct-literature treats it as optional enrichment and skips it after retries. Semantic Scholar's key requires a manual application-form review (not auto-issued); when no key is configured, this source is skipped outright (no doomed 429 request is sent).
+> All are public bibliographic APIs — no WAF. OpenAlex requires an API key since 2026-02-13: keyless traffic is throttled to 100 credits/day; a free key lifts this to 100k/day. Provide via `--openalex-key` or env `OPENALEX_API_KEY`; ct-literature also keeps the polite-pool `mailto`. Europe PMC is **on by default** (zero key, high value) — disable with `--no-with-europepmc`. bioRxiv / medRxiv have no free keyword-search API of their own; both are indexed by Europe PMC's preprint corpus, so ct-literature pulls them through `SRC:PPR` filtered by publisher and labels them as distinct `bioRxiv` / `medRxiv` provenance. Semantic Scholar may return HTTP 429 without a key — ct-literature treats it as optional enrichment and skips it after retries; its key requires a manual application-form review (not auto-issued), so when no key is configured this source is skipped outright. arXiv is keyless but mostly methodology breadth for clinical questions — kept opt-in.
 
 ## Features
 
@@ -95,6 +98,7 @@ The four B-tier public-intel skills are complementary, each answering a differen
 | Formatted citations + BibTeX/RIS | All | `--citation-style` (apa/nature/vancouver/ieee/gb7714, default apa) + `--export-bib` (default on) → `references.bib` / `references.ris` / `references_<style>.md` |
 | PRISMA screening funnel | All | `--prisma` (default on) deterministic title/abstract rule screen (reuses `SAFETY_LEXICON` / `review_type`, no LLM) → `merged.json` `prisma` block + inline SVG funnel in `merged.html` |
 | Relevance scoring | All | `--rank relevance` + optional `--keywords` → each work gets `relevance_score` (0–1, title 0.6 + abstract 0.4); report adds a Relevance column |
+| Obsidian / 文献管理集成 | All | `--obsidian` → 每篇文献一篇 Obsidian 兼容 Markdown 笔记（含 `[[笔记名\|作者 年份]]` 内部链接 + 基于共享概念的「相关文献」交叉链接）+ `Literature MOC.md` 索引；`--zotero` → 导出 `zotero.csv` / `zotero.ris`（Zotero 可导入） |
 
 ## Unified work schema
 
@@ -104,7 +108,7 @@ The four B-tier public-intel skills are complementary, each answering a differen
   pmid, pmcid, doi,
   abstract_snippet,            # full text, not truncated
   mesh, concepts, keywords, funders,
-  language, is_retracted, is_safety,
+  language, is_retracted, is_safety, is_preprint,
   volume, issue, page,
   affiliations,                # Europe PMC only
   sources }                    # list of contributing sources
@@ -112,12 +116,14 @@ The four B-tier public-intel skills are complementary, each answering a differen
 
 ## Output
 
-- `openalex.json` / `europepmc.json` / `semantic_scholar.json` — per-source payloads
+- `openalex.json` / `europepmc.json` / `semantic_scholar.json` / `biorxiv.json` / `medrxiv.json` / `arxiv.json` — per-source payloads (only those enabled)
 - `merged.json` — unified, de-duplicated work list (DOI/title dedupe, `sources` provenance)
 - `lit_report.md` — summary header + top-works table (with OA download links) + key-detail cards + study-type distribution + yearly trend + safety/CSM subset
 - `lit_report.xlsx` — Excel delivery (reuses ct-base `excel_style`); auto-generated on `--run` (`--no-xlsx` to skip). Green theme, 4 sheets: Overview → Literature master → Safety-related, with KPI cards, yearly/source/type charts, `is_safety` amber highlighting, and a field dictionary.
 - `merged.html` — self-contained HTML report (inline CSS, offline, print/PDF styles); auto-generated on `--run` (`--no-html` to skip). Same palette as the xlsx. Includes an inline-SVG **PRISMA funnel** when `--prisma` is on.
 - `references.bib` / `references.ris` / `references_<style>.md` — formatted citations (style from `--citation-style`) + BibTeX/RIS exports; auto-generated on `--run` unless `--no-export-bib`. See `references/citation_styles.md`.
+- `obsidian/` (with `--obsidian`) — `<论文标题>.md` 每篇文献一篇（YAML frontmatter + 摘要 + 来源链接 + `[[Literature MOC]]` 回链 + 相关文献 `[[...]]` 交叉链接）+ `Literature MOC.md` 索引笔记。将整个 `obsidian/` 文件夹作为 Obsidian vault 打开即可图谱化浏览文献网络。
+- `zotero.csv` / `zotero.ris` (with `--zotero`) — Zotero 可导入格式：CSV 列名对齐 Zotero 导入约定（多作者 / 多标签用 `||` 分隔），RIS 为跨平台书目交换权威格式（建议优先用 RIS 导入）。
 - `merged.json` gains two additive blocks: `prisma` (screening funnel counts) and per-work `relevance_score` / `prisma_included` — both incremental-compatible with existing consumers.
 
 See `references/sop.md` for the full command catalogue.
@@ -143,6 +149,10 @@ python scripts/ct_literature.py --topic "osimertinib" --review-type systematic-r
 
 # Add Europe PMC (MEDLINE/MeSH) + Semantic Scholar (citation ranking; may 429 -> skipped)
 python scripts/ct_literature.py --topic "osimertinib" --with-europepmc --with-semantic-scholar --run --out-dir ./out
+
+# Add biomedical/medical preprints (bioRxiv + medRxiv) and arXiv methodology breadth
+# (Europe PMC is already ON by default; disable with --no-with-europepmc)
+python scripts/ct_literature.py --topic "osimertinib" --with-biorxiv --with-medrxiv --with-arxiv --run --out-dir ./out
 ```
 
 One-shot orchestration (OpenAlex + optional sources → merge → report):
@@ -182,23 +192,8 @@ python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir .
 
 ## Cross-Database Search Mode (Embase / Cochrane / Web of Science + preprint Tier P)
 
-`ct-literature` is OpenAlex-primary by design, but for formal systematic reviews you can invoke a **cross-database** layer adapted from `multi-database-literature-collector` (AIPOCH, MIT — migrated 2026-08-04):
-
-- **Database selection rules** — pick Embase (broad biomedical), Cochrane (RCT/intervention), Web of Science (citation), preprints (Tier P) per question type. See `references/multi-db-search.md`.
-- **Search-strategy construction** — controlled vocabulary (MeSH/Emtree) + free text + Boolean; per-database syntax adaptation.
-- **Preprint labelling** — tag preprint works as **Tier P** so the evidence base separates peer-reviewed from not-yet-peer-reviewed.
-- **Normalization** — still collapses to the unified schema and de-dupes across all sources.
-
-> This mode is a *planning + normalization* extension; the live fetch currently runs OpenAlex / Europe PMC / Semantic Scholar. Cross-database source lists inform the search strategy and screening-ready export, not a separate live crawler.
+For formal systematic reviews, a **cross-database** planning layer (adapted from `multi-database-literature-collector`, AIPOCH MIT) covers Embase / Cochrane / Web of Science / registries / preprints beyond the automated sources; it builds search strategy, labels preprints **Tier P**, and normalizes to the unified schema. The live fetch still runs OpenAlex / Europe PMC (default-on) / Semantic Scholar / bioRxiv / medRxiv / arXiv; Embase / Cochrane / WoS lists inform strategy and screening-ready export, not a separate crawler. See `references/multi-db-search.md`.
 
 ## Natural language dialogue
 
-When the user triggers ct-literature via natural language (not CLI), follow the dialogue flow defined in `references/search_menu.md`:
-
-1. Parse topic / review_type / year / safety from user utterance
-2. If ≥2 params recognized → skip to preview
-3. If params missing → ask max 2 rounds, then use defaults
-4. Show preview table → wait for confirmation
-5. Execute `--run` → present result summary with follow-up options
-
-See `references/search_menu.md` for the full menu templates, follow-up strategy, preset recommendations, and dialogue examples. See `references/units.md` for the atomic-task unit index.
+When triggered via natural language, follow `references/search_menu.md`: parse topic / review_type / year / safety; with ≥2 params recognized skip to preview; otherwise ask at most 2 rounds then default; show preview table → wait for confirmation → `--run` → present summary with follow-ups. Full menu templates and dialogue examples: `references/search_menu.md`; atomic-task units: `references/units.md`.

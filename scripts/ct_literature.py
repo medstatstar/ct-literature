@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fetch_openalex
 import fetch_europepmc
 import fetch_semantic_scholar
+import fetch_preprints
+import fetch_arxiv
 import normalize
 import report as report_mod
 import export_xlsx
@@ -27,6 +29,8 @@ import export_html
 import score_relevance
 import screen_prisma
 import format_citations
+import obsidian_exporter
+import zotero_exporter
 import http_utils  # shared GET+retry; load_openalex_key() auto-loads key from env/.env
 
 # P0 new capabilities default flags
@@ -37,15 +41,20 @@ DEFAULT_RANK = "cited"  # keep legacy cited-by ordering unless --rank relevance
 
 
 def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
-        max_results=30, with_europepmc=False, with_semantic_scholar=False,
+        max_results=30, with_europepmc=True, with_semantic_scholar=False,
+        with_biorxiv=False, with_medrxiv=False, with_arxiv=False,
         out_dir="./out", make_xlsx=True, make_html=True, openalex_key=None,
         citation_style=DEFAULT_CITATION_STYLE, export_bib=DEFAULT_EXPORT_BIB,
-        prisma=DEFAULT_PRISMA, rank=DEFAULT_RANK, keywords=None):
+        prisma=DEFAULT_PRISMA, rank=DEFAULT_RANK, keywords=None,
+        obsidian=False, zotero=False):
     os.makedirs(out_dir, exist_ok=True)
     http_utils.notify_openalex_key_if_missing(openalex_key)
     oa_json = os.path.join(out_dir, "openalex.json")
     epmc_json = os.path.join(out_dir, "europepmc.json")
     s2_json = os.path.join(out_dir, "semantic_scholar.json")
+    biorxiv_json = os.path.join(out_dir, "biorxiv.json")
+    medrxiv_json = os.path.join(out_dir, "medrxiv.json")
+    arxiv_json = os.path.join(out_dir, "arxiv.json")
     merged_json = os.path.join(out_dir, "merged.json")
     md_out = os.path.join(out_dir, "lit_report.md")
 
@@ -61,6 +70,18 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         s2 = fetch_semantic_scholar.fetch(topic, review_type, year_from, year_to, safety,
                                           max_results, run=True, out=s2_json)
         payloads.append(s2)
+    if with_biorxiv:
+        br = fetch_preprints.fetch(topic, review_type, year_from, year_to, safety,
+                                   max_results, run=True, out=biorxiv_json, server="biorxiv")
+        payloads.append(br)
+    if with_medrxiv:
+        mr = fetch_preprints.fetch(topic, review_type, year_from, year_to, safety,
+                                   max_results, run=True, out=medrxiv_json, server="medrxiv")
+        payloads.append(mr)
+    if with_arxiv:
+        ax = fetch_arxiv.fetch(topic, review_type, year_from, year_to, safety,
+                               max_results, run=True, out=arxiv_json)
+        payloads.append(ax)
 
     works = normalize.merge(payloads)
 
@@ -128,6 +149,23 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             print("[OK] html  ->", html_out)
         except Exception as _he:
             print("[WARN] html export failed: %s" % _he)
+
+    # ---- F: Obsidian / Zotero 文献管理软件集成 ----
+    if obsidian:
+        try:
+            ob = obsidian_exporter.export_obsidian(
+                {"count": len(works), "works": works}, out_dir=out_dir, lang="zh")
+            print("[OK] obsidian notes=%d -> %s" % (ob["count"], ob["folder"]))
+            print("     moc -> %s" % ob["moc"])
+        except Exception as _oe:
+            print("[WARN] obsidian export failed: %s" % _oe)
+    if zotero:
+        try:
+            zo = zotero_exporter.export_zotero(
+                {"count": len(works), "works": works}, out_dir=out_dir)
+            print("[OK] zotero csv/ris -> %s / %s" % (zo["csv"], zo["ris"]))
+        except Exception as _ze:
+            print("[WARN] zotero export failed: %s" % _ze)
     return md_out
 
 
@@ -142,13 +180,20 @@ def main():
     ap.add_argument("--safety", action="store_true",
                     help="safety / CSM bias (AE, toxicity, case report, PV)")
     ap.add_argument("--max", type=int, default=30, help="max works per source")
-    ap.add_argument("--with-europepmc", action="store_true",
-                    help="also search Europe PMC (MEDLINE/MeSH, biomedical precision)")
+    ap.add_argument("--with-europepmc", action=argparse.BooleanOptionalAction, default=True,
+                    help="search Europe PMC (MEDLINE/MeSH, biomedical precision); default ON; "
+                         "use --no-with-europepmc to disable")
     ap.add_argument("--with-semantic-scholar", action="store_true",
                     help="(low-priority supplementary source) search via Semantic Scholar "
                          "(citation-ranked); its API key requires a manual form review and is "
                          "not auto-issued, so it auto-skips when absent and never affects the "
                          "OpenAlex / Europe PMC primary output")
+    ap.add_argument("--with-biorxiv", action="store_true",
+                    help="include bioRxiv preprints (biomedical preprints, via Europe PMC PPR index)")
+    ap.add_argument("--with-medrxiv", action="store_true",
+                    help="include medRxiv preprints (medical/clinical preprints, via Europe PMC PPR index)")
+    ap.add_argument("--with-arxiv", action="store_true",
+                    help="include arXiv (physics/CS/ML methodology breadth; opt-in supplementary)")
     ap.add_argument("--run", action="store_true", help="execute network requests")
     ap.add_argument("--no-xlsx", action="store_true",
                     help="skip Excel (.xlsx) export (default: auto-generate)")
@@ -174,6 +219,12 @@ def main():
                     help="order works by cited_by_count (default) or relevance_score")
     ap.add_argument("--keywords", default=None,
                     help="comma-separated extra keywords for relevance scoring")
+    # ---- F: literature-manager integration ----
+    ap.add_argument("--obsidian", action="store_true",
+                    help="export Obsidian notes (per-paper .md + MOC index, "
+                         "internal [[links]]); writes <out-dir>/obsidian/")
+    ap.add_argument("--zotero", action="store_true",
+                    help="export Zotero-importable zotero.csv + zotero.ris into <out-dir>/")
     args = ap.parse_args()
 
     if not args.run:
@@ -182,16 +233,23 @@ def main():
             extra.append("EuropePMC")
         if args.with_semantic_scholar:
             extra.append("SemanticScholar")
+        if args.with_biorxiv:
+            extra.append("bioRxiv")
+        if args.with_medrxiv:
+            extra.append("medRxiv")
+        if args.with_arxiv:
+            extra.append("arXiv")
         srcs = "OpenAlex" + (" + " + ", ".join(extra) if extra else "")
         print("[PREVIEW] would run literature pipeline: topic=%r review_type=%r safety=%s "
               "sources=[%s] (use --run)" % (args.topic, args.review_type, args.safety, srcs))
         return
     run(args.topic, args.review_type, args.year_from, args.year_to, args.safety,
-        args.max, args.with_europepmc, args.with_semantic_scholar, args.out_dir,
+        args.max, args.with_europepmc, args.with_semantic_scholar,
+        args.with_biorxiv, args.with_medrxiv, args.with_arxiv, args.out_dir,
         make_xlsx=not args.no_xlsx, make_html=not args.no_html,
         openalex_key=args.openalex_key, citation_style=args.citation_style,
         export_bib=args.export_bib, prisma=args.prisma, rank=args.rank,
-        keywords=args.keywords)
+        keywords=args.keywords, obsidian=args.obsidian, zotero=args.zotero)
 
 
 if __name__ == "__main__":
