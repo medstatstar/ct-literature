@@ -6,7 +6,7 @@ single standalone .html file (inline CSS, safety-row highlight, source/type
 distributions as CSS bars) so content is fully readable in any browser / the
 WorkBuddy artifact preview without the client's limited xlsx viewer.
 
-Theme: literature academic green, reusing ct-base `excel_style` palette.
+Theme: literature academic green, reusing vendored excel_style palette.
 
 Usage:
     python export_html.py --in-json ../out_live/merged.json \
@@ -15,7 +15,11 @@ Usage:
 import os, sys, json, html, argparse, datetime
 from collections import Counter
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ct-base", "scripts"))
+# IMPORTANT (2026-08-11): ct-base is NEVER published. Every ct- skill must carry
+# its own complete copy. We ONLY import from this skill's own `scripts/` dir.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 import excel_style as X
 
 PALETTE = X.PALETTES["literature"]
@@ -89,6 +93,39 @@ def _sanitize(data):
         data = dict(data)
         data["works"] = out
         return data
+
+
+def prisma_funnel_svg(prisma, P):
+    """Inline SVG PRISMA-2020 funnel (no third-party deps). Returns '' if empty."""
+    stages = (prisma or {}).get("stages") or []
+    if not stages:
+        return ""
+    maxc = max((s.get("count") or 0) for s in stages) or 1
+    W, H, pad, top = 620, 340, 24, 18
+    n = len(stages)
+    band_h = (H - top - 24) / n
+    colors = [P["navy"], P["blue"], P["banner"], P["warn_bd"]]
+    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
+           f'width="100%" role="img" aria-label="PRISMA funnel">']
+    for i, s in enumerate(stages):
+        c = s.get("count") or 0
+        w = max(50, c / maxc * (W - 2 * pad))
+        x = (W - w) / 2.0
+        y = top + i * band_h
+        col = colors[i % len(colors)]
+        svg.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{band_h - 6:.1f}" '
+                   f'rx="6" fill="{col}" opacity="0.88"/>')
+        cx = W / 2.0
+        cy = y + (band_h - 6) / 2.0
+        label = (s.get("label") or s.get("stage") or "")
+        if len(label) > 42:
+            label = label[:40] + "…"
+        svg.append(f'<text x="{cx:.1f}" y="{cy - 2:.1f}" fill="#fff" font-size="13" '
+                   f'text-anchor="middle" font-family="sans-serif">{esc(label)}</text>')
+        svg.append(f'<text x="{cx:.1f}" y="{cy + 15:.1f}" fill="#fff" font-size="15" '
+                   f'font-weight="700" text-anchor="middle" font-family="sans-serif">n = {c}</text>')
+    svg.append('</svg>')
+    return "".join(svg)
 
 
 def render(data, lang):
@@ -174,6 +211,26 @@ def render(data, lang):
     if not srows:
         srows = f'<tr><td colspan="6" class="empty">—</td></tr>'
 
+    # PRISMA funnel (P0-B) — machine rule-based screen summary
+    prisma = data.get("prisma")
+    prisma_html = ""
+    if prisma and prisma.get("stages"):
+        svg = prisma_funnel_svg(prisma, P)
+        rows = "".join(
+            f'<tr><td>{esc(s.get("label", s.get("stage")))}</td>'
+            f'<td class="num">{s.get("count")}</td></tr>'
+            for s in prisma["stages"])
+        reasons = prisma["stages"][2].get("reasons") if len(prisma["stages"]) > 2 else {}
+        reason_txt = (" · ".join("%s=%d" % (k, v) for k, v in reasons.items())) if reasons else ""
+        prisma_html = (
+            f'<h2>PRISMA 筛选漏斗 / Screening funnel</h2>'
+            f'<div class="prisma">{svg}'
+            f'<table><thead><tr><th>Stage / 阶段</th><th class="num">n</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table>'
+            + (f'<div class="prisma-note">排除原因 / Excluded: {esc(reason_txt)}</div>' if reason_txt else "")
+            + f'<div class="prisma-note">⚠️ {esc(prisma.get("note", ""))}</div>'
+            f'</div>')
+
     css = f"""
     :root {{ --navy:{P['navy']}; --blue:{P['blue']}; --light:{P['light']};
             --banner:{P['banner']}; --grid:{P['grid']}; --greytx:{P['greytx']};
@@ -207,6 +264,11 @@ def render(data, lang):
     .bar {{ height:14px; border-radius:4px; display:inline-block; vertical-align:middle; }}
     .barval {{ margin-left:8px; font-size:12px; color:var(--greytx); }}
     .dist {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:18px; }}
+    .prisma {{ background:#fff; border:1px solid var(--grid); border-radius:10px;
+               padding:16px; margin-top:14px; }}
+    .prisma svg {{ display:block; max-width:620px; margin:0 auto 10px; }}
+    .prisma table {{ max-width:420px; margin:0 auto; }}
+    .prisma-note {{ font-size:12px; color:var(--greytx); margin-top:8px; text-align:center; }}
     @media (max-width:880px) {{ .dist {{ grid-template-columns:1fr; }} .kpis {{ grid-template-columns:repeat(2,1fr); }} }}
     @media print {{
       @page {{ margin:12mm; }}
@@ -249,6 +311,8 @@ def render(data, lang):
   <table><thead><tr><th>{esc(L['col.source'])}</th><th>{esc(L['col.title'])}</th><th class="num">{esc(L['col.year'])}</th>
   <th>{esc(L['col.pub'])}</th><th>{esc(L['col.abstract'])}</th><th>{esc(L['col.link'])}</th></tr></thead>
   <tbody>{srows}</tbody></table>
+
+  {prisma_html}
 </div></body></html>"""
 
 

@@ -3,7 +3,7 @@ slug: ct-literature
 name: ct-literature
 displayName: 临床试验文献检索专家 / Clinical Trial Literature Search
 cn_name: 临床试验文献检索专家
-version: 0.5.3
+version: 0.5.4
 invocable: true
 summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准 + Semantic Scholar 引用增强），归一化合并去重，产出证据基础与 CSM 定性安全性文献集；B 档公开检索，零保密输入。
 license: MIT
@@ -92,6 +92,9 @@ The four B-tier public-intel skills are complementary, each answering a differen
 | Chained invocation | — | → `ct-pipeline`, → `ct-protocol` / `ct-csr` |
 | Resilient fetch (retry + backoff) | All | Exponential backoff on 429/5xx/timeout; honors `Retry-After`; OpenAlex Bearer key via `--openalex-key` / `OPENALEX_API_KEY` / skill `.env` auto-load |
 | Safe link rendering | All | `_normalize_link()` sanitises every hyperlink before export |
+| Formatted citations + BibTeX/RIS | All | `--citation-style` (apa/nature/vancouver/ieee/gb7714, default apa) + `--export-bib` (default on) → `references.bib` / `references.ris` / `references_<style>.md` |
+| PRISMA screening funnel | All | `--prisma` (default on) deterministic title/abstract rule screen (reuses `SAFETY_LEXICON` / `review_type`, no LLM) → `merged.json` `prisma` block + inline SVG funnel in `merged.html` |
+| Relevance scoring | All | `--rank relevance` + optional `--keywords` → each work gets `relevance_score` (0–1, title 0.6 + abstract 0.4); report adds a Relevance column |
 
 ## Unified work schema
 
@@ -113,7 +116,9 @@ The four B-tier public-intel skills are complementary, each answering a differen
 - `merged.json` — unified, de-duplicated work list (DOI/title dedupe, `sources` provenance)
 - `lit_report.md` — summary header + top-works table (with OA download links) + key-detail cards + study-type distribution + yearly trend + safety/CSM subset
 - `lit_report.xlsx` — Excel delivery (reuses ct-base `excel_style`); auto-generated on `--run` (`--no-xlsx` to skip). Green theme, 4 sheets: Overview → Literature master → Safety-related, with KPI cards, yearly/source/type charts, `is_safety` amber highlighting, and a field dictionary.
-- `merged.html` — self-contained HTML report (inline CSS, offline, print/PDF styles); auto-generated on `--run` (`--no-html` to skip). Same palette as the xlsx.
+- `merged.html` — self-contained HTML report (inline CSS, offline, print/PDF styles); auto-generated on `--run` (`--no-html` to skip). Same palette as the xlsx. Includes an inline-SVG **PRISMA funnel** when `--prisma` is on.
+- `references.bib` / `references.ris` / `references_<style>.md` — formatted citations (style from `--citation-style`) + BibTeX/RIS exports; auto-generated on `--run` unless `--no-export-bib`. See `references/citation_styles.md`.
+- `merged.json` gains two additive blocks: `prisma` (screening funnel counts) and per-work `relevance_score` / `prisma_included` — both incremental-compatible with existing consumers.
 
 See `references/sop.md` for the full command catalogue.
 

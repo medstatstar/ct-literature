@@ -12,7 +12,7 @@ Sheets (names localized):
                            safety-relevant rows (is_safety) highlighted amber
   4. Safety-Related     - filtered subset where is_safety is true
 
-Rendering standard (single source of truth): ct-base/scripts/excel_style.py
+Rendering standard: scripts/excel_style.py (vendored from ct-base/scripts/excel_style.py)
   - header row height 24px (HEADER_H)
   - per-cell zebra striping (light green + grey grid border)
   - safety-relevant rows highlighted with warn_bg
@@ -30,12 +30,13 @@ from datetime import datetime
 import xlsxwriter
 
 # ═══════════════════════════════════════════════════════════════════════════
-# import the shared ct-base excel rendering standard (single source of truth)
+# import the shared excel rendering standard (vendored from ct-base)
+# IMPORTANT (2026-08-11): ct-base is NEVER published. Every ct- skill must carry
+# its own complete copy. We ONLY import from this skill's own `scripts/` dir.
 # ═══════════════════════════════════════════════════════════════════════════
-_CT_BASE_SCRIPTS = os.path.normpath(os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "ct-base", "scripts"))
-if _CT_BASE_SCRIPTS not in sys.path:
-    sys.path.insert(0, _CT_BASE_SCRIPTS)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 try:
     from excel_style import (
         make_formats, banner as _banner, page_decor as _page_decor,
@@ -43,9 +44,9 @@ try:
         add_chart as _add_chart, chart_h as _chart_h, chart_w as _chart_w,
         dist_pie_points as _dist_pie_points, ROW_PX, BAND_GAP,
     )
-except Exception as _e:  # pragma: no cover — ct-base must be present
-    raise RuntimeError("ct-literature export_xlsx: cannot import ct-base "
-                       "excel_style standard: " + str(_e))
+except Exception as _e:  # pragma: no cover — vendored copy must be present
+    raise RuntimeError("ct-literature export_xlsx: cannot import vendored "
+                       "excel_style: " + str(_e))
 
 P = PALETTES["literature"]
 NAVY, BLUE, LIGHT = P["navy"], P["blue"], P["light"]
@@ -62,7 +63,7 @@ CHART_COL = "E"  # right-side anchor column for all overview charts (no overlap)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# i18n — reuse ct-base's shared i18n; skill-specific labels live in _LOCAL.
+# i18n — reuse vendored i18n; skill-specific labels live in _LOCAL.
 # ═══════════════════════════════════════════════════════════════════════════
 try:
     from i18n import (t as _base_t, set_lang as _base_set_lang,

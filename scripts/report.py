@@ -75,6 +75,11 @@ def render(works, meta=None):
     lines.append("- **Sources / 来源**: %s" % (", ".join(src_set) if src_set else "—"))
     if meta.get("safety"):
         lines.append("- **Mode / 模式**: safety / CSM (safety-biased)")
+    if meta.get("citation_style"):
+        lines.append("- **Citation style / 引文样式**: %s (references.bib / .ris exported)"
+                     % meta["citation_style"])
+    if meta.get("rank") == "relevance":
+        lines.append("- **Rank / 排序**: by relevance_score (desc)")
     lines.append("")
 
     if not works:
@@ -83,21 +88,24 @@ def render(works, meta=None):
 
     # Top works table
     lines.append("### Top works by citations / 按被引排序的 Top 文献\n")
-    lines.append("| # | Year | Type | Title | Authors | Cited | Source | OA |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("| # | Year | Type | Title | Authors | Cited | Rel | Source | OA |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for i, w in enumerate(works[:25], 1):
         title = (w.get("title") or "").replace("|", "/")
         if len(title) > 90:
             title = title[:87] + "…"
         oa_url = w.get("open_access_url")
         oa_cell = "[📥](%s)" % oa_url if oa_url else ""
-        lines.append("| %d | %s | %s | %s | %s | %s | %s | %s |" % (
+        rel = w.get("relevance_score")
+        rel_cell = "%.0f%%" % (float(rel) * 100) if isinstance(rel, (int, float)) else "—"
+        lines.append("| %d | %s | %s | %s | %s | %s | %s | %s | %s |" % (
             i,
             w.get("year") or "—",
             w.get("study_type") or w.get("type") or "—",
             title,
             _authors_str(w.get("authors")),
             _int_or_none(w.get("cited_by_count")) or 0,
+            rel_cell,
             "/".join(_src_list(w)) or "—",
             oa_cell,
         ))
@@ -155,6 +163,25 @@ def render(works, meta=None):
         if abstract:
             lines.append("")
             lines.append("> **Abstract**: %s" % abstract)
+        lines.append("")
+
+    # PRISMA screening funnel (machine rule-based screen, P0-B)
+    prisma = meta.get("prisma") if isinstance(meta, dict) else None
+    if prisma and prisma.get("stages"):
+        lines.append("### PRISMA screening funnel / PRISMA 筛选漏斗\n")
+        lines.append("| Stage / 阶段 | Count / 数量 |")
+        lines.append("|---|---|")
+        for s in prisma["stages"]:
+            lines.append("| %s | %s |" % (s.get("label", s.get("stage")), s.get("count")))
+        lines.append("")
+        if prisma.get("stages")[2].get("reasons"):
+            reasons = prisma["stages"][2]["reasons"]
+            lines.append("Exclusion reasons / 排除原因: %s"
+                         % ", ".join("%s=%d" % (k, v) for k, v in reasons.items()))
+            lines.append("")
+        lines.append("> ⚠️ %s" % prisma.get("note",
+                       "机器初筛，非人工终审 / Machine screen — not a substitute for "
+                       "human final review."))
         lines.append("")
 
     # Study-type distribution

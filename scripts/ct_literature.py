@@ -24,12 +24,23 @@ import normalize
 import report as report_mod
 import export_xlsx
 import export_html
+import score_relevance
+import screen_prisma
+import format_citations
 import http_utils  # shared GET+retry; load_openalex_key() auto-loads key from env/.env
+
+# P0 new capabilities default flags
+DEFAULT_CITATION_STYLE = "apa"
+DEFAULT_EXPORT_BIB = True
+DEFAULT_PRISMA = True
+DEFAULT_RANK = "cited"  # keep legacy cited-by ordering unless --rank relevance
 
 
 def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         max_results=30, with_europepmc=False, with_semantic_scholar=False,
-        out_dir="./out", make_xlsx=True, make_html=True, openalex_key=None):
+        out_dir="./out", make_xlsx=True, make_html=True, openalex_key=None,
+        citation_style=DEFAULT_CITATION_STYLE, export_bib=DEFAULT_EXPORT_BIB,
+        prisma=DEFAULT_PRISMA, rank=DEFAULT_RANK, keywords=None):
     os.makedirs(out_dir, exist_ok=True)
     http_utils.notify_openalex_key_if_missing(openalex_key)
     oa_json = os.path.join(out_dir, "openalex.json")
@@ -52,16 +63,52 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         payloads.append(s2)
 
     works = normalize.merge(payloads)
+
+    # ---- P0-C: relevance scoring (annotates merged works, incremental) ----
+    works = score_relevance.score_works(works, topic=topic, keywords=keywords)
+
+    # ---- P0-B: deterministic PRISMA title/abstract screen (no LLM) ----
+    prisma_block = None
+    if prisma:
+        sp = screen_prisma.screen(works, topic=topic, review_type=review_type,
+                                  safety=safety)
+        works = sp["works"]
+        prisma_block = sp["prisma"]
+
+    # ---- ranking ----
+    if rank == "relevance":
+        try:
+            works = sorted(works, key=lambda w: -(float(w.get("relevance_score") or 0)))
+        except Exception:
+            pass
+
+    out_data = {"count": len(works), "works": works}
+    if prisma_block:
+        out_data["prisma"] = prisma_block
     with open(merged_json, "w", encoding="utf-8") as f:
-        json.dump({"count": len(works), "works": works}, f, ensure_ascii=False, indent=2)
+        json.dump(out_data, f, ensure_ascii=False, indent=2)
     print("[OK] merged %d unique works -> %s" % (len(works), merged_json))
 
     meta = {"topic": topic, "review_type": review_type,
-            "year_from": year_from, "year_to": year_to, "safety": safety}
+            "year_from": year_from, "year_to": year_to, "safety": safety,
+            "citation_style": citation_style if export_bib else None,
+            "rank": rank, "keywords": keywords,
+            "prisma": prisma_block}
     md = report_mod.render(works, meta)
     with open(md_out, "w", encoding="utf-8") as f:
         f.write(md)
     print("[OK] report ->", md_out)
+
+    # ---- P0-A: citation formatting + BibTeX/RIS export ----
+    if export_bib:
+        try:
+            fc = format_citations.export_citations(
+                {"count": len(works), "works": works}, style=citation_style,
+                out_dir=out_dir, lang="auto")
+            print("[OK] citations(%s) -> %s / %s" % (
+                citation_style, fc["bib_path"], fc["ris_path"]))
+        except Exception as _ce:
+            print("[WARN] citation export failed: %s" % _ce)
 
     if make_xlsx:
         xlsx_out = os.path.join(out_dir, "lit_report.xlsx")
@@ -75,7 +122,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     if make_html:
         html_out = os.path.join(out_dir, "lit_report.html")
         try:
-            html_text = export_html.render({"count": len(works), "works": works}, "auto")
+            html_text = export_html.render(out_data, "auto")
             with open(html_out, "w", encoding="utf-8") as f:
                 f.write(html_text)
             print("[OK] html  ->", html_out)
@@ -111,6 +158,22 @@ def main():
     ap.add_argument("--openalex-key", default=http_utils.load_openalex_key(),
                     help="OpenAlex API key (Bearer). Auto-loaded from env OPENALEX_API_KEY "
                          "or skill .env. Free key lifts rate limit 100 -> 100k credits/day.")
+    # ---- P0 new flags ----
+    ap.add_argument("--citation-style", default=DEFAULT_CITATION_STYLE,
+                    choices=format_citations.STYLES,
+                    help="citation style for references export (default: apa)")
+    ap.add_argument("--export-bib", action=argparse.BooleanOptionalAction,
+                    default=DEFAULT_EXPORT_BIB,
+                    help="export references.bib / references.ris (default: on; "
+                         "use --no-export-bib to disable)")
+    ap.add_argument("--prisma", action=argparse.BooleanOptionalAction,
+                    default=DEFAULT_PRISMA,
+                    help="run deterministic PRISMA title/abstract screen + funnel "
+                         "(default: on; use --no-prisma to disable)")
+    ap.add_argument("--rank", default=DEFAULT_RANK, choices=["cited", "relevance"],
+                    help="order works by cited_by_count (default) or relevance_score")
+    ap.add_argument("--keywords", default=None,
+                    help="comma-separated extra keywords for relevance scoring")
     args = ap.parse_args()
 
     if not args.run:
@@ -126,7 +189,9 @@ def main():
     run(args.topic, args.review_type, args.year_from, args.year_to, args.safety,
         args.max, args.with_europepmc, args.with_semantic_scholar, args.out_dir,
         make_xlsx=not args.no_xlsx, make_html=not args.no_html,
-        openalex_key=args.openalex_key)
+        openalex_key=args.openalex_key, citation_style=args.citation_style,
+        export_bib=args.export_bib, prisma=args.prisma, rank=args.rank,
+        keywords=args.keywords)
 
 
 if __name__ == "__main__":

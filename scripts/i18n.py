@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-i18n.py -- bilingual (EN/ZH) localization for ct-literature.
+i18n.py -- bilingual (EN/ZH) localization for the ct- skill library (shared base layer)
 
 Provides:
   - is_chinese_os(): detect if the OS locale is Chinese
@@ -11,20 +11,20 @@ Provides:
 Rules (per ~/.workbuddy/MEMORY.md "双语语言策略"):
   - Default: English
   - Auto-switch to Chinese when OS locale contains zh/CN
-  - Code output is NOT affected by language policy
+  - Code output (R/Python) is NOT affected by language policy
 
 Usage:
   from i18n import t
+  print(t("error.rscript_not_found"))
   print(t("info.result_saved", path="/tmp/x.json"))
 
-NOTE: ct-literature is a pure-Python literature-search skill and does NOT
-execute R. All R-related message keys were removed; API-key configuration is
-documented in references/openalex_key.md (self-config only -- never paste a
-real key into chat; see its §7 Security notes).
+Bilingual data lives in i18n_messages.json (same directory) -- see that file
+for all EN/ZH strings. This module holds only detection + lookup logic.
 """
 
 import os
 import sys
+import json
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -99,104 +99,38 @@ def _current_lang():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Message dictionary / 消息字典
+# Message dictionary / 消息字典 —— 数据外置到 i18n_messages.json（EN/ZH 成对）
 # ═══════════════════════════════════════════════════════════════════════════
 
-_MESSAGES = {
-    # ── Generic messages / 通用消息 ──
-    "info.result_saved": {
-        "en": "Result JSON saved to: {path}",
-        "zh": "结果 JSON 已保存至：{path}",
-    },
-    "info.png_saved": {
-        "en": "PNG saved to: {path}",
-        "zh": "PNG 已保存至：{path}",
-    },
-    "error.generic": {
-        "en": "ERROR: {msg}",
-        "zh": "错误：{msg}",
-    },
-    "error.val_err": {
-        "en": "ERROR: {msg}",
-        "zh": "错误：{msg}",
-    },
-    "validation.failed": {
-        "en": "Parameter validation failed:",
-        "zh": "参数校验失败：",
-    },
-    "validation.range_error_gt": {
-        "en": "--{label} must be > {bound} (got {val})",
-        "zh": "--{label} 必须 > {bound}（当前值 {val}）",
-    },
-    "validation.range_error_lt": {
-        "en": "--{label} must be < {bound} (got {val})",
-        "zh": "--{label} 必须 < {bound}（当前值 {val}）",
-    },
-    # ── ct-literature: OpenAlex key notice / OpenAlex 密钥提示 ──
-    "openalex.key_notice": {
-        "en": (
-            "[KEY] No OpenAlex API key found — running in keyless mode "
-            "(capped at 100 credits/day since 2026-02-13).\n"
-            "      Apply for a FREE key (~30s) at https://openalex.org/settings/api, then one of:\n"
-            "        • cp .env.example .env  and set OPENALEX_API_KEY=your_key   (recommended, zero extra flags)\n"
-            "        • export OPENALEX_API_KEY=your_key\n"
-            "        • pass --openalex-key your_key\n"
-            "      See references/openalex_key.md for details. "
-            "Your key is for your own use only, stored locally in .env / env var, "
-            "and sent solely to the official OpenAlex API over HTTPS — never to any third party. "
-            "Do not paste a real key into chat (see §7 Security notes)."
-        ),
-        "zh": (
-            "[密钥] 未检测到 OpenAlex API key —— 当前为无 key 模式"
-            "（自 2026-02-13 起限 100 credits/天）。\n"
-            "      请免费申请 key（约 30 秒）：https://openalex.org/settings/api ，随后三选一：\n"
-            "        • cp .env.example .env 并填入 OPENALEX_API_KEY=你的key（推荐，零额外参数）\n"
-            "        • 设置环境变量 export OPENALEX_API_KEY=你的key\n"
-            "        • 传 --openalex-key 你的key\n"
-            "      详见 references/openalex_key.md。key 仅你自用、本地存储于 .env / 环境变量，"
-            "仅通过 HTTPS 发往官方 OpenAlex API，不会发给任何第三方。"
-            "请勿在对话中粘贴真实 key（见 §7 安全说明）。"
-        ),
-    },
-    # ── ct-literature: Semantic Scholar key notice / S2 密钥提示 ──
-    "semantic_scholar.key_notice": {
-        "en": (
-            "[KEY] Semantic Scholar API key not found — running keyless "
-            "(strict ~1 req/s rate limit, prone to HTTP 429 and graceful degradation; "
-            "OpenAlex + Europe PMC still produce results).\n"
-            "      Apply for a FREE key (form-based, manually reviewed, NOT auto-issued; "
-            "please wait after applying): "
-            "https://www.semanticscholar.org/product/api#api-key-form\n"
-            "      When no key is configured this source is skipped entirely "
-            "(no network request). Configure via .env / env var / --openalex-key (see "
-            "references/openalex_key.md). Your key is for your own use only, stored locally, "
-            "and sent solely to the official Semantic Scholar API over HTTPS. "
-            "Do not paste a real key into chat."
-        ),
-        "zh": (
-            "[密钥] 未检测到 Semantic Scholar API Key，当前以无 key 模式运行"
-            "（限流严格，易触发 429 并自动降级，不影响 OpenAlex / Europe PMC 主源产出）。\n"
-            "      申请免费 key（填表，需人工审核、非自动发放，申请后请等待）："
-            "https://www.semanticscholar.org/product/api#api-key-form\n"
-            "      未配置 key 时本源自动跳过（不发起请求）；通过 .env / 环境变量 / "
-            "--openalex-key 配置（详见 references/openalex_key.md）。key 仅你自用、本地存储，"
-            "仅通过 HTTPS 发往官方 Semantic Scholar API。请勿在对话中粘贴真实 key。"
-        ),
-    },
-    "semantic_scholar.skip_no_key": {
-        "en": "[SKIP] Semantic Scholar skipped — no API key configured "
-              "(form-based, manually reviewed, not auto-issued); no network request made.",
-        "zh": "[跳过] Semantic Scholar 未配置 key（需填表人工审核、非自动发放）"
-              " -> 跳过本源，不发起网络请求。",
-    },
-}
+# 外部双语数据文件（与本模块同目录），全库面向用户 EN/ZH 字符串的唯一来源。
+# 新增/修改文案请在 i18n_messages.json 中操作，切勿在消费脚本内硬编码中英文。
+# / External bilingual data file (same dir). Single source of truth for all
+# user-facing EN/ZH strings. Edit i18n_messages.json, never hard-code in callers.
+#
+# 分区索引（与 JSON 内 key 前缀对应）：
+#   generic / exec / info / error / validation / install / header —— 全库通用消息
+#   xlsx.*          —— ct-registry Excel 报告框架标签
+#   xlsx.safety.*   —— ct-safety FAERS Excel 报告标签
+#   kw_gate.*       —— ct-registry 关键字体系确认菜单
+#   auth.*          —— 首次出站授权 / 依赖缺失 / 网络错误 / 回退本地等一次性提示（底座预置标准词条）
+# 注：原始数据值（CDE 中文状态、中文适应症、反应 PT 等）一律不翻译，仅翻译 UI 框架标签。
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_MSG_PATH = os.path.join(_HERE, "i18n_messages.json")
+
+try:
+    with open(_MSG_PATH, encoding="utf-8") as _f:
+        _MESSAGES = json.load(_f)
+except (OSError, ValueError):
+    # 离线兜底：文件缺失/损坏也不让模块崩溃；缺的 key 由 t() 回退为 key 本身。
+    _MESSAGES = {}
 
 
 def t(key, **kwargs):
     """Translate a message key to the current locale.
 
     Args:
-        key: message identifier in _MESSAGES
+        key: message identifier in i18n_messages.json
         **kwargs: format placeholders (e.g., path="/tmp/x.json")
 
     Returns:

@@ -21,9 +21,6 @@ This module provides reusable defensive helpers only:
         user value can NEVER break out of an R string literal and inject code.
   - sanitize_output()
         Strip file paths and truncate before any output is shown to the user.
-
-NOTE: ct-literature is a pure-Python literature-search skill and does NOT run
-R; this file ships only the defensive helpers and is never imported here.
 """
 
 import os
