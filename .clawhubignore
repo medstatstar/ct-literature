@@ -15,6 +15,7 @@ tests/results/
 tests/smoke_out/
 tests/scenario10_run/
 tests/scenario10b_run/
+tests/scenario10b_run/
 # 硬化回归脚本（开发产物，不纳入发布包）
 tests/scenario10c.py
 tests/scenario10c_x10.py
