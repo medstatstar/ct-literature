@@ -40,8 +40,9 @@ SKILL_ROOT = os.path.dirname(HERE)
 SCRIPTS = os.path.join(SKILL_ROOT, "scripts")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
+sys.path.insert(0, os.path.join(os.path.dirname(SCRIPTS), "adapters"))
 
-import http_utils  # noqa: E402  (必须在 patch 前导入)
+from adapters import http_utils  # noqa: E402  (必须在 patch 前导入)
 
 # ───────────────────────────────────────────────────────────────────────────
 # 真实形状的 API 夹具（mock 掉 http_utils.get_json 后返回）

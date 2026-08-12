@@ -27,8 +27,12 @@ ct-literature is part of the `ct-` clinical-trial skill family, built for three 
 | Source | Key | Role |
 |---|---|---|
 | OpenAlex | recommended (free key; keyless = 100/day since 2026-02-13) | **Primary** — broad, citation-rich |
-| Europe PMC | no key | Optional `--with-europepmc` — MEDLINE/MeSH biomedical precision |
+| Europe PMC | no key | **On by default** (`--no-with-europepmc` to disable) — MEDLINE/MeSH biomedical precision |
 | Semantic Scholar | no key (429-prone) | Optional `--with-semantic-scholar` — citation ranking; **skipped automatically** when no key / on 429 |
+| bioRxiv | no key (via Europe PMC PPR) | Optional `--with-biorxiv` — biomedical preprints |
+| medRxiv | no key (via Europe PMC PPR) | Optional `--with-medrxiv` — medical/clinical preprints |
+| arXiv | no key | Optional `--with-arxiv` — physics/CS/ML methodology breadth |
+| PROSPERO | token required (undocumented auth header) | Optional `--with-prospero` — systematic-review registry / protocol discovery; **reserved source**, degrades to a no-op skip until a working token + header is supplied |
 
 ## 1. How to Use It in a Chat (the Core)
 
@@ -118,6 +122,13 @@ The skill covers published-evidence retrieval across the clinical-trial lifecycl
 | Excel deliverable | "Export the literature as an Excel file" |
 | Markdown report only | "Just give me the Markdown report, skip Excel" |
 
+### ③b Evidence verification & provenance (P0, default ON)
+| Situation | Try saying in chat |
+|:---|:---|
+| Verify every DOI/PMID is real (anti-hallucination) | "Verify the citations are real before you report" |
+| Trace where each hit came from | "Show me the evidence provenance / source log" |
+| Skip verification (faster, preview-only) | "Don't verify citations this time" |
+
 ### ④ Key / setup
 | Situation | Try saying in chat |
 |:---|:---|
@@ -139,6 +150,23 @@ The skill covers published-evidence retrieval across the clinical-trial lifecycl
 **Q: On a Chinese system, is the output in Chinese?** A: Yes. Output language follows your OS setting by default (Chinese on a Chinese-OS, English otherwise), and you can force-switch anytime with one sentence (e.g. "switch to English").
 
 **Q: Semantic Scholar keeps failing / being skipped?** A: The S2 key requires a manual form review (not auto-issued, waits after applying), so it is usually absent short-term. When no key is configured the source is **skipped entirely** (no network request) rather than attempting-and-degrading. Configure it later if you need citation ranking.
+
+**Q: How long does a search take? What are the rate limits?** A:
+- **Typical latency:** Each enabled source runs sequentially; Europe PMC ~1s/page, OpenAlex ~2s/page. A 3-source search pulling ~50 works typically finishes in **10–30 seconds**. Adding preprints (bioRxiv/medRxiv/arXiv) adds a few seconds more.
+- **Result cap:** The default `max_results` caps how many works are merged per run. Raising it increases time and API usage linearly.
+- **Rate limits:**
+  - **OpenAlex (keyless):** 100 credits/day (since 2026-02-13). A single multi-page search can use 5–20 credits. A free key lifts this to **100k/day**.
+  - **Europe PMC:** No hard key limit, but please keep request frequency reasonable (no tight loops).
+  - **Semantic Scholar (no key):** Prone to HTTP 429; the skill skips it entirely when no key is configured.
+- **Tip:** Start with the default sources (OpenAlex + Europe PMC) and a modest `max_results`; only enable extra sources if you need broader coverage.
+
+**Q: Can I download the full-text PDFs?** A: The Excel and HTML reports include an **"Open Access"** column with a direct link to a free PDF when one is available from the publisher or repository (typically 60–80% of recent works). For paywalled papers, the column shows "—"; the skill does **not** bypass paywalls or download copyrighted content. To obtain the full text of a paywalled paper, use your institution's library access, interlibrary loan, or contact the corresponding author directly.
+
+**Q: Can the skill help me download PDFs from legal sources?** A: Yes, on request — but be aware:
+- **What it does:** Given a DOI or PMID, attempt to resolve an open-access PDF URL from legitimate sources (e.g., Unpaywall, Europe PMC, PubMed Central).
+- **Cost warning:** Each request involves at least one HTTP lookup + a redirect chain to the PDF. For a batch of 50 works, this adds **1–3 minutes** of extra time and consumes additional API credits (OpenAlex/Europe PMC).
+- **No guarantee:** Many papers have no legal open-access copy. The skill will tell you which ones resolved and which did not.
+- **How to ask:** Provide a specific DOI/PMID list (e.g., from the current merged.json) and say "try to fetch legal OA PDFs for these".
 
 ---
 
@@ -199,6 +227,14 @@ python scripts/ct_literature.py --topic "osimertinib" \
 # Recommended (zero extra flags): put the key in the skill .env, then just run
 cp .env.example .env          # edit .env -> OPENALEX_API_KEY=your_key
 python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir ./out
+
+# P0 · citation verification (default ON) + evidence log are automatic under --run.
+# Disable verification explicitly with --no-verify-citations.
+python scripts/ct_literature.py --topic "osimertinib" --run --out-dir ./out
+
+# P1 · PROSPERO systematic-review registry (opt-in, reserved source — dormant until a token is set)
+python scripts/ct_literature.py --topic "osimertinib" \
+    --with-prospero --prospero-token "$PROSPERO_API_TOKEN" --run --out-dir ./out
 ```
 
 ### Unified work mode (output schema)
@@ -218,7 +254,7 @@ python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir .
 
 ---
 
-**Version**: v0.5.3 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.6.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, feel free to contact the author directly at medstatstar@gmail.com (Wintone Zhang / 张文彤).
 
@@ -226,7 +262,7 @@ For feature requests, bug reports, or other feedback, feel free to contact the a
 
 ## Confidentiality Notice
 
-> The CT series consists of 16+ skills, providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle. However, since many skills involve strictly confidential clinical-trial data and internal information from pharma sponsors, only the non-confidential Level A / B skills are published openly on GitHub; the confidential Level C / D skills (e.g., ct-analysis) are designated for internal enterprise use only.
+> The CT series consists of 20+ skills, providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle. However, since many skills involve strictly confidential clinical-trial data and internal information from pharma sponsors, only the non-confidential Level A / B skills are published openly on GitHub; the confidential Level C / D skills (e.g., ct-analysis) are designated for internal enterprise use only.
 
 > If you do have a genuine need for these confidential skills, please contact the author to request custom installation.
 

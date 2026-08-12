@@ -3,11 +3,11 @@ slug: ct-literature
 name: ct-literature
 displayName: 临床试验文献检索专家 / Clinical Trial Literature Search
 cn_name: 临床试验文献检索专家
-version: 0.5.7
+version: 0.6.0
 invocable: true
 summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + Semantic Scholar 引用增强 + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集；B 档公开检索，零保密输入。
 license: MIT
-description: "Search public scholarly literature and normalize it into one de-duplicated evidence base: OpenAlex (primary, free, citation-rich) + Europe PMC (MEDLINE/MeSH, biomedical precision) + Semantic Scholar (citation ranking, optional). Filter by review type, year range, and a safety/CSM bias mode that surfaces published adverse-event / pharmacovigilance literature. Produces JSON + Markdown. Reads only public publications; zero confidential input, B-tier (ordinary input + public retrieval). / 检索公开学术文献并归一化合并为统一去重证据库：OpenAlex（主源，免费、含引用数）+ Europe PMC（MEDLINE/MeSH，生物医学精准）+ Semantic Scholar（引用排序，可选）。按综述类型、年份区间筛选，并提供安全性/CSM 偏置模式以提取已发表不良事件/药物警戒文献。产出 JSON + Markdown。仅读公开文献，零保密数据输入，B 档（普通输入 + 对外检索）。"
+description: "检索公开学术文献并归一化合并为统一去重证据库：OpenAlex（主源，免费、含引用数）+ Europe PMC（MEDLINE/MeSH，生物医学精准）+ Semantic Scholar（引用排序，可选）。按综述类型、年份区间筛选，并提供安全性/CSM 偏置模式以提取已发表不良事件/药物警戒文献。产出 JSON + Markdown。仅读公开文献，零保密数据输入，B 档（普通输入 + 对外检索）。含引文标识实时验证与证据溯源日志（反幻觉，ct-base §17.1）。 / Search public scholarly literature and normalize it into one de-duplicated evidence base: OpenAlex (primary, free, citation-rich) + Europe PMC (MEDLINE/MeSH, biomedical precision) + Semantic Scholar (citation ranking, optional). Filter by review type, year range, and a safety/CSM bias mode that surfaces published adverse-event / pharmacovigilance literature. Produces JSON + Markdown. Reads only public publications; zero confidential input, B-tier (ordinary input + public retrieval). Includes citation-identifier verification and a provenance evidence log (anti-hallucination, ct-base §17.1)."
 triggers:
   - "systematic literature search"
   - "系统文献检索"
@@ -73,8 +73,11 @@ The four B-tier public-intel skills are complementary, each answering a differen
 | bioRxiv | Via Europe PMC `SRC:PPR` + `publisher:bioRxiv` (no standalone keyword API) | Optional `--with-biorxiv` | Biomedical preprints (Tier P) |
 | medRxiv | Via Europe PMC `SRC:PPR` + `publisher:medRxiv` | Optional `--with-medrxiv` | Medical/clinical preprints (Tier P) |
 | arXiv | Public Atom API (`export.arxiv.org/api/query`), no key | Optional `--with-arxiv` | Physics/CS/ML methodology breadth (opt-in supplementary) |
+| PROSPERO | Public REST (CRD York, systematic-review register), **auth header undocumented** | Optional `--with-prospero` (key-gated, **reserved source**) | Duplication-avoidance / protocol discovery — *is a review on this topic already registered?* (review/protocol granularity) |
 
 > All are public bibliographic APIs — no WAF. OpenAlex requires an API key since 2026-02-13: keyless traffic is throttled to 100 credits/day; a free key lifts this to 100k/day. Provide via `--openalex-key` or env `OPENALEX_API_KEY`; ct-literature also keeps the polite-pool `mailto`. Europe PMC is **on by default** (zero key, high value) — disable with `--no-with-europepmc`. bioRxiv / medRxiv have no free keyword-search API of their own; both are indexed by Europe PMC's preprint corpus, so ct-literature pulls them through `SRC:PPR` filtered by publisher and labels them as distinct `bioRxiv` / `medRxiv` provenance. Semantic Scholar may return HTTP 429 without a key — ct-literature treats it as optional enrichment and skips it after retries; its key requires a manual application-form review (not auto-issued), so when no key is configured this source is skipped outright. arXiv is keyless but mostly methodology breadth for clinical questions — kept opt-in.
+
+> **PROSPERO is a reserved source (2026-08-12).** Its public REST API now requires an auth header that is not documented anywhere; every unauthenticated probe returns `{"status":"error","errormessage":"Error code: header value undefined"}`. `--with-prospero` is kept as a dormant interface: without a token it degrades to a graceful no-op skip (returns `None`, no file written — exactly like Semantic Scholar's no-key behaviour) and is **not** claimed functional. Supply `--prospero-token` (+ `--prospero-header` if the default `PROSPERO-ACCESS-TOKEN` is wrong) to exercise it; the response parser is schema-tolerant (JSON + XML) but must be re-validated against a real 200 before the feature is declared done. No application for an API token is planned — the interface is retained for future enabling.
 
 ## Features
 
@@ -99,6 +102,9 @@ The four B-tier public-intel skills are complementary, each answering a differen
 | PRISMA screening funnel | All | `--prisma` (default on) deterministic title/abstract rule screen (reuses `SAFETY_LEXICON` / `review_type`, no LLM) → `merged.json` `prisma` block + inline SVG funnel in `merged.html` |
 | Relevance scoring | All | `--rank relevance` + optional `--keywords` → each work gets `relevance_score` (0–1, title 0.6 + abstract 0.4); report adds a Relevance column |
 | Obsidian / 文献管理集成 | All | `--obsidian` → 每篇文献一篇 Obsidian 兼容 Markdown 笔记（含 `[[笔记名\|作者 年份]]` 内部链接 + 基于共享概念的「相关文献」交叉链接）+ `Literature MOC.md` 索引；`--zotero` → 导出 `zotero.csv` / `zotero.ris`（Zotero 可导入） |
+| **P0 · Citation verification** | All | `--no-verify-citations` to disable (default ON) → each merged work is checked against its live identifier (doi → `doi.org` 200, pmid → Europe PMC EXT_ID, OpenAlex id → `api.openalex.org`) and tagged `citation_verified` / `citation_verify_status` (verified / unresolved / no_identifier / suspicious) / `citation_verify_note`; a malformed DOI is flagged `suspicious` (possible hallucinated id). Anti-hallucination, ct-base §17.1. |
+| **P0 · Evidence provenance log** | All | Every run emits `evidence_log.json` + `evidence_log.md` (and an Evidence Log sheet in the workbook + an Evidence & Verification block in the HTML): query → source → hit count → retrieved_at → verification rate, fully traceable. |
+| **P1 · PROSPERO registry** | Review register | `--with-prospero` (opt-in, key-gated, **reserved source**) → systematic-review registration / protocol discovery. Requires an API token (`--prospero-token` / env `PROSPERO_API_TOKEN`); the public REST auth header is undocumented so it degrades to a no-op skip until a working token + header is supplied. Never claimed functional. Retained as a dormant interface — no token application planned. |
 
 ## Unified work schema
 
@@ -175,25 +181,19 @@ python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir .
 
 ## Errors
 
-| Error | Cause | Fix |
-|---|---|---|
-| `urllib.error.URLError` / timeout (after retries) | No network / proxy / outage | Auto-retried with exponential backoff (4 attempts, honors `Retry-After`); if still failing, confirm api.openalex.org reachable; configure proxy |
-| Semantic Scholar HTTP 429 | No-key rate limit | Expected — source is skipped; rely on OpenAlex + Europe PMC |
-| OpenAlex HTTP 401 / persistent 429 | Invalid key / daily quota exhausted | Re-copy key from settings/api; confirm `.env` loaded (see references/openalex_key.md) |
-| Empty results | Topic too narrow / wrong spelling | Broaden topic; drop `--review-type` / year filter |
-| DOI dedupe merged too aggressively | Two papers share a DOI typo | Rare; inspect `merged.json` and re-run a single source if needed |
+See `references/errors.md` for the full error catalogue (network / 429 / 401 / empty results / DOI dedupe).
 
 ## Pipeline
 
-- `ct-registry` → `ct-literature`: landscape hypothesis (from registry) seeds the literature search topic.
+- `ct-registry` → `ct-literature`: landscape hypothesis seeds the literature search topic.
 - `ct-literature` → `ct-pipeline`: literature works feed the `intel` preset's evidence dimension.
 - `ct-literature` → `ct-protocol` / `ct-csr`: published evidence backs the introduction / background.
-- `ct-literature --safety` → `ct-safety`: published safety literature qualitatively corroborates FAERS signals (distinct data type).
+- `ct-literature --safety` → `ct-safety`: published safety literature qualitatively corroborates FAERS signals.
 
-## Cross-Database Search Mode (Embase / Cochrane / Web of Science + preprint Tier P)
+## Cross-Database Search Mode
 
-For formal systematic reviews, a **cross-database** planning layer (adapted from `multi-database-literature-collector`, AIPOCH MIT) covers Embase / Cochrane / Web of Science / registries / preprints beyond the automated sources; it builds search strategy, labels preprints **Tier P**, and normalizes to the unified schema. The live fetch still runs OpenAlex / Europe PMC (default-on) / Semantic Scholar / bioRxiv / medRxiv / arXiv; Embase / Cochrane / WoS lists inform strategy and screening-ready export, not a separate crawler. See `references/multi-db-search.md`.
+A cross-database planning layer (Embase / Cochrane / Web of Science + preprint Tier P, adapted from `multi-database-literature-collector`, AIPOCH MIT) builds search strategy and labels preprints **Tier P**; live fetch still runs OpenAlex / Europe PMC / Semantic Scholar / bioRxiv / medRxiv / arXiv. See `references/multi-db-search.md`.
 
 ## Natural language dialogue
 
-When triggered via natural language, follow `references/search_menu.md`: parse topic / review_type / year / safety; with ≥2 params recognized skip to preview; otherwise ask at most 2 rounds then default; show preview table → wait for confirmation → `--run` → present summary with follow-ups. Full menu templates and dialogue examples: `references/search_menu.md`; atomic-task units: `references/units.md`.
+Follow `references/search_menu.md`: parse topic / review_type / year / safety; ≥2 params → preview; otherwise ≤2 rounds then default; preview → confirm → `--run` → present summary. Atomic-task units: `references/units.md`.

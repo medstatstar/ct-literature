@@ -119,6 +119,54 @@ def get_json(url, headers=None, timeout=45, max_retries=4, backoff=2.0):
     raise HttpError("unreachable retry loop", retryable=True)
 
 
+def get_text(url, headers=None, timeout=45, max_retries=4, backoff=2.0):
+    """GET `url` and return decoded text, with built-in exponential-backoff retries.
+
+    Used by sources (e.g. PROSPERO) that may return non-JSON (XML) payloads.
+    Returns decoded str (lossy replacement on bad bytes). Mirrors get_json's retry
+    policy; on exhaust/4xx raises HttpError for the caller to degrade.
+    """
+    hdrs = {"User-Agent": UA}
+    if headers:
+        hdrs.update(headers)
+    for attempt in range(1, max_retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=hdrs)
+            r = urllib.request.urlopen(req, timeout=timeout)
+            return r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if e.code == 429 or 500 <= e.code < 600:
+                wait = _retry_after(e) or (backoff ** (attempt - 1))
+                print("[WARN] HTTP %s on %s (attempt %d/%d) -> retry in %.1fs"
+                      % (e.code, _short(url), attempt, max_retries, wait))
+                if attempt < max_retries:
+                    time.sleep(wait)
+                    continue
+                raise HttpError("HTTP %s after %d retries" % (e.code, max_retries),
+                                status=e.code, retryable=True)
+            raise HttpError("HTTP %s (non-retryable)" % e.code,
+                            status=e.code, retryable=False)
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            wait = backoff ** (attempt - 1)
+            print("[WARN] request error on %s (attempt %d/%d): %s -> retry in %.1fs"
+                  % (_short(url), attempt, max_retries, e, wait))
+            if attempt < max_retries:
+                time.sleep(wait)
+                continue
+            raise HttpError("request failed after %d retries: %s" % (max_retries, e),
+                            retryable=True)
+        except Exception as e:  # noqa: BLE001
+            wait = backoff ** (attempt - 1)
+            print("[WARN] unexpected error on %s (attempt %d/%d): %s -> retry in %.1fs"
+                  % (_short(url), attempt, max_retries, e, wait))
+            if attempt < max_retries:
+                time.sleep(wait)
+                continue
+            raise HttpError("unexpected failure after %d retries: %s" % (max_retries, e),
+                            retryable=True)
+    raise HttpError("unreachable retry loop", retryable=True)
+
+
 def build_openalex_headers(api_key=None, mailto="dev@example.com"):
     """Build OpenAlex request headers: polite-pool mailto (in UA) + optional Bearer key.
 

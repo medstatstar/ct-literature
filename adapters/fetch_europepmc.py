@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import http_utils  # shared GET+retry (exponential backoff, 429 Retry-After)
+from adapters import http_utils  # shared GET+retry (exponential backoff, 429 Retry-After)
 
 BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 

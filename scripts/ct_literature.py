@@ -17,11 +17,11 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import fetch_openalex
-import fetch_europepmc
-import fetch_semantic_scholar
-import fetch_preprints
-import fetch_arxiv
+from adapters import fetch_openalex
+from adapters import fetch_europepmc
+from adapters import fetch_semantic_scholar
+from adapters import fetch_preprints
+from adapters import fetch_arxiv
 import normalize
 import report as report_mod
 import export_xlsx
@@ -31,7 +31,10 @@ import screen_prisma
 import format_citations
 import obsidian_exporter
 import zotero_exporter
-import http_utils  # shared GET+retry; load_openalex_key() auto-loads key from env/.env
+from adapters import verify_citations  # P0: citation identifier verification (anti-hallucination)
+import evidence_log      # P0: provenance audit trail (ct-base §17.1)
+from adapters import fetch_prospero    # P1: PROSPERO systematic-review registry (key-gated, opt-in)
+from adapters import http_utils  # shared GET+retry; load_openalex_key() auto-loads key from env/.env
 
 # P0 new capabilities default flags
 DEFAULT_CITATION_STYLE = "apa"
@@ -43,6 +46,8 @@ DEFAULT_RANK = "cited"  # keep legacy cited-by ordering unless --rank relevance
 def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         max_results=30, with_europepmc=True, with_semantic_scholar=False,
         with_biorxiv=False, with_medrxiv=False, with_arxiv=False,
+        with_prospero=False, prospero_token=None, prospero_header="PROSPERO-ACCESS-TOKEN",
+        verify_citations_flag=True,
         out_dir="./out", make_xlsx=True, make_html=True, openalex_key=None,
         citation_style=DEFAULT_CITATION_STYLE, export_bib=DEFAULT_EXPORT_BIB,
         prisma=DEFAULT_PRISMA, rank=DEFAULT_RANK, keywords=None,
@@ -55,6 +60,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     biorxiv_json = os.path.join(out_dir, "biorxiv.json")
     medrxiv_json = os.path.join(out_dir, "medrxiv.json")
     arxiv_json = os.path.join(out_dir, "arxiv.json")
+    prospero_json = os.path.join(out_dir, "prospero.json")
     merged_json = os.path.join(out_dir, "merged.json")
     md_out = os.path.join(out_dir, "lit_report.md")
 
@@ -82,6 +88,11 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         ax = fetch_arxiv.fetch(topic, review_type, year_from, year_to, safety,
                                max_results, run=True, out=arxiv_json)
         payloads.append(ax)
+    if with_prospero:
+        pr = fetch_prospero.fetch(topic, review_type, year_from, year_to, safety,
+                                  max_results, run=True, out=prospero_json,
+                                  token=prospero_token, header_name=prospero_header)
+        payloads.append(pr)
 
     works = normalize.merge(payloads)
 
@@ -103,18 +114,36 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         except Exception:
             pass
 
-    out_data = {"count": len(works), "works": works}
-    if prisma_block:
-        out_data["prisma"] = prisma_block
-    with open(merged_json, "w", encoding="utf-8") as f:
-        json.dump(out_data, f, ensure_ascii=False, indent=2)
-    print("[OK] merged %d unique works -> %s" % (len(works), merged_json))
+    # ---- P0: citation verification (anti-hallucination, ct-base §17.1) ----
+    vsum = None
+    if verify_citations_flag:
+        works, vsum = verify_citations.verify_works(works, run=True)
+        print("[OK] citation verification: %s" % json.dumps(vsum, ensure_ascii=False))
 
+    # ---- build meta (shared by report / xlsx / html / evidence log) ----
     meta = {"topic": topic, "review_type": review_type,
             "year_from": year_from, "year_to": year_to, "safety": safety,
             "citation_style": citation_style if export_bib else None,
             "rank": rank, "keywords": keywords,
-            "prisma": prisma_block}
+            "prisma": prisma_block,
+            "verification": vsum,
+            "with_prospero": with_prospero}
+
+    # ---- P0: provenance audit trail (evidence log) ----
+    evidence = evidence_log.build_log(payloads, topic, meta, vsum)
+    ev_res = evidence_log.write_log(evidence, out_dir)
+    meta["evidence_log"] = evidence
+    print("[OK] evidence_log -> %s / %s" % (ev_res["json"], ev_res["md"]))
+
+    out_data = {"count": len(works), "works": works}
+    if prisma_block:
+        out_data["prisma"] = prisma_block
+    out_data["evidence_log"] = evidence
+    out_data["verification"] = vsum
+    with open(merged_json, "w", encoding="utf-8") as f:
+        json.dump(out_data, f, ensure_ascii=False, indent=2)
+    print("[OK] merged %d unique works -> %s" % (len(works), merged_json))
+
     md = report_mod.render(works, meta)
     with open(md_out, "w", encoding="utf-8") as f:
         f.write(md)
@@ -194,6 +223,17 @@ def main():
                     help="include medRxiv preprints (medical/clinical preprints, via Europe PMC PPR index)")
     ap.add_argument("--with-arxiv", action="store_true",
                     help="include arXiv (physics/CS/ML methodology breadth; opt-in supplementary)")
+    # ---- P1: PROSPERO systematic-review registry (opt-in, key-gated, UNVERIFIED) ----
+    ap.add_argument("--with-prospero", action="store_true",
+                    help="(P1, supplementary) include PROSPERO systematic-review registry "
+                         "hits (duplication-avoidance / protocol discovery). Requires an API "
+                         "token; currently key-gated + UNVERIFIED (the public REST API auth "
+                         "header is undocumented) — degrades to a no-op skip when no token.")
+    ap.add_argument("--prospero-token", default=os.environ.get("PROSPERO_API_TOKEN"),
+                    help="PROSPERO API token (env PROSPERO_API_TOKEN). Required for --with-prospero.")
+    ap.add_argument("--prospero-header", default="PROSPERO-ACCESS-TOKEN",
+                    help="header name carrying the PROSPERO token (default: "
+                         "PROSPERO-ACCESS-TOKEN; override if the real header differs)")
     ap.add_argument("--run", action="store_true", help="execute network requests")
     ap.add_argument("--no-xlsx", action="store_true",
                     help="skip Excel (.xlsx) export (default: auto-generate)")
@@ -219,6 +259,10 @@ def main():
                     help="order works by cited_by_count (default) or relevance_score")
     ap.add_argument("--keywords", default=None,
                     help="comma-separated extra keywords for relevance scoring")
+    # ---- P0: citation verification toggle ----
+    ap.add_argument("--no-verify-citations", action="store_true",
+                    help="disable P0 citation-identifier verification (anti-hallucination); "
+                         "default ON (verifies doi/pmid/OpenAlex id against the live source)")
     # ---- F: literature-manager integration ----
     ap.add_argument("--obsidian", action="store_true",
                     help="export Obsidian notes (per-paper .md + MOC index, "
@@ -239,13 +283,19 @@ def main():
             extra.append("medRxiv")
         if args.with_arxiv:
             extra.append("arXiv")
+        if args.with_prospero:
+            extra.append("PROSPERO(token-gated)")
         srcs = "OpenAlex" + (" + " + ", ".join(extra) if extra else "")
         print("[PREVIEW] would run literature pipeline: topic=%r review_type=%r safety=%s "
               "sources=[%s] (use --run)" % (args.topic, args.review_type, args.safety, srcs))
         return
     run(args.topic, args.review_type, args.year_from, args.year_to, args.safety,
         args.max, args.with_europepmc, args.with_semantic_scholar,
-        args.with_biorxiv, args.with_medrxiv, args.with_arxiv, args.out_dir,
+        args.with_biorxiv, args.with_medrxiv, args.with_arxiv,
+        with_prospero=args.with_prospero, prospero_token=args.prospero_token,
+        prospero_header=args.prospero_header,
+        verify_citations_flag=not args.no_verify_citations,
+        out_dir=args.out_dir,
         make_xlsx=not args.no_xlsx, make_html=not args.no_html,
         openalex_key=args.openalex_key, citation_style=args.citation_style,
         export_bib=args.export_bib, prisma=args.prisma, rank=args.rank,

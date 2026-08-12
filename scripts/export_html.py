@@ -32,8 +32,15 @@ _LABELS = {
         "works": "Works", "col.source": "Source", "col.id": "ID", "col.title": "Title",
         "col.authors": "Authors", "col.year": "Year", "col.pub": "Publication",
         "col.type": "Type", "col.study": "Study", "col.cited": "Cited", "col.link": "Link",
+        "col.oa": "Open Access",
         "col.abstract": "Abstract", "overview": "Overview", "by_src": "By Source",
         "by_type": "By Type", "by_year": "By Year", "safety": "Safety / CSM Subset",
+        "evidence": "Evidence & Verification", "ev.verify": "Citation verification",
+        "ev.verified": "Verified", "ev.unresolved": "Unresolved",
+        "ev.no_id": "No identifier", "ev.suspicious": "Suspicious",
+        "ev.preview": "preview — skipped", "ev.src": "Source", "ev.query": "Query",
+        "ev.type": "Type", "ev.year": "Year", "ev.safety": "Safety",
+        "ev.count": "Count", "ev.retrieved": "Retrieved", "ev.status": "Status",
     },
     "zh": {
         "doc_title": "文献证据库",
@@ -42,8 +49,15 @@ _LABELS = {
         "works": "文献列表", "col.source": "来源", "col.id": "ID", "col.title": "标题",
         "col.authors": "作者", "col.year": "年份", "col.pub": "期刊",
         "col.type": "类型", "col.study": "研究类型", "col.cited": "被引", "col.link": "链接",
+        "col.oa": "开放获取链接",
         "col.abstract": "摘要", "overview": "概览", "by_src": "按来源", "by_type": "按类型",
         "by_year": "按年份", "safety": "安全性 / CSM 子集",
+        "evidence": "证据溯源与引文验证", "ev.verify": "引文验证",
+        "ev.verified": "已验证", "ev.unresolved": "未解析",
+        "ev.no_id": "无标识", "ev.suspicious": "可疑",
+        "ev.preview": "预览，已跳过", "ev.src": "来源", "ev.query": "检索式",
+        "ev.type": "类型", "ev.year": "年份", "ev.safety": "安全性",
+        "ev.count": "数量", "ev.retrieved": "检索时间", "ev.status": "状态",
     },
 }
 
@@ -190,11 +204,14 @@ def render(data, lang):
         tr_cls = ' class="safety"' if safe else ""
         url = _html_link(w.get("url"))
         link = f'<a href="{esc(url)}" target="_blank" rel="noopener">↗</a>' if url else "—"
+        oa_url = _html_link(w.get("open_access_url"))
+        oa_link = f'<a href="{esc(oa_url)}" target="_blank" rel="noopener">OA</a>' if oa_url else "—"
         wrows += (f'<tr{tr_cls}><td>{esc(w.get("source"))}</td><td>{esc(w.get("id"))}</td>'
                   f'<td>{esc(w.get("title"))}</td><td>{esc(w.get("authors"))}</td>'
                   f'<td class="num">{esc(w.get("year"))}</td><td>{esc(w.get("publication"))}</td>'
                   f'<td>{esc(w.get("type"))}</td><td>{esc(w.get("study_type"))}</td>'
-                  f'<td class="num">{esc(w.get("cited_by_count"))}</td><td>{link}</td></tr>')
+                  f'<td class="num">{esc(w.get("cited_by_count"))}</td><td>{link}</td>'
+                  f'<td>{oa_link}</td></tr>')
 
     # safety subset
     srows = ""
@@ -230,6 +247,49 @@ def render(data, lang):
             + (f'<div class="prisma-note">排除原因 / Excluded: {esc(reason_txt)}</div>' if reason_txt else "")
             + f'<div class="prisma-note">⚠️ {esc(prisma.get("note", ""))}</div>'
             f'</div>')
+
+    # Evidence & verification (P0: provenance + citation verification, ct-base §17.1)
+    evidence = data.get("evidence_log") or {}
+    verification = data.get("verification") or {}
+    evidence_html = ""
+    if evidence or verification:
+        blocks = []
+        if verification:
+            skip = (" · " + esc(L["ev.preview"])) if verification.get("skipped_preview") else ""
+            vsum = (f'<div class="ev-verify"><b>{esc(L["ev.verify"])}:</b> '
+                    f'{esc(L["ev.verified"])}={verification.get("verified", 0)} · '
+                    f'{esc(L["ev.unresolved"])}={verification.get("unresolved", 0)} · '
+                    f'{esc(L["ev.no_id"])}={verification.get("no_identifier", 0)} · '
+                    f'{esc(L["ev.suspicious"])}={verification.get("suspicious", 0)}'
+                    f'{esc(skip)}</div>')
+            blocks.append(vsum)
+        srcs = (evidence.get("sources") or []) if isinstance(evidence, dict) else []
+        if srcs:
+            rows = "".join(
+                f'<tr><td>{esc(s.get("source"))}</td><td>{esc((s.get("query") or "")[:120])}</td>'
+                f'<td>{esc(s.get("review_type") or "all")}</td>'
+                f'<td>{esc(("%s–%s" % (s.get("year_from") or "", s.get("year_to") or "")) if (s.get("year_from") or s.get("year_to")) else "—")}</td>'
+                f'<td>{esc("Y" if s.get("safety") else "—")}</td>'
+                f'<td class="num">{esc(s.get("count", 0))}</td>'
+                f'<td>{esc((s.get("retrieved_at") or "")[:19])}</td>'
+                f'<td>{esc(s.get("status", ""))}</td></tr>'
+                for s in srcs)
+            blocks.append(
+                f'<table><thead><tr><th>{esc(L["ev.src"])}</th><th>{esc(L["ev.query"])}</th>'
+                f'<th>{esc(L["ev.type"])}</th><th>{esc(L["ev.year"])}</th>'
+                f'<th>{esc(L["ev.safety"])}</th><th class="num">{esc(L["ev.count"])}</th>'
+                f'<th>{esc(L["ev.retrieved"])}</th><th>{esc(L["ev.status"])}</th></tr></thead>'
+                f'<tbody>{rows}</tbody></table>')
+        if not blocks:
+            blocks.append('<div class="ev-verify">—</div>')
+        ev_note = ('<div class="prisma-note">Provenance audit trail (ct-base §17.1): '
+                   'every evidence item is traceable to its source query and retrieval time. '
+                   'Verification status is advisory, not a substitute for human review. / '
+                   '证据溯源审计（ct-base §17.1）：每条证据可回溯至来源检索式与检索时间；'
+                   '验证状态仅供参考，不替代人工核查。</div>')
+        evidence_html = (
+            f'<h2>{esc(L["evidence"])}</h2>'
+            f'<div class="prisma">{"".join(blocks)}{ev_note}</div>')
 
     css = f"""
     :root {{ --navy:{P['navy']}; --blue:{P['blue']}; --light:{P['light']};
@@ -304,7 +364,7 @@ def render(data, lang):
   <h2>{esc(L['works'])}</h2>
   <table><thead><tr><th>{esc(L['col.source'])}</th><th>{esc(L['col.id'])}</th><th>{esc(L['col.title'])}</th>
   <th>{esc(L['col.authors'])}</th><th class="num">{esc(L['col.year'])}</th><th>{esc(L['col.pub'])}</th>
-  <th>{esc(L['col.type'])}</th><th>{esc(L['col.study'])}</th><th class="num">{esc(L['col.cited'])}</th><th>{esc(L['col.link'])}</th></tr></thead>
+  <th>{esc(L['col.type'])}</th><th>{esc(L['col.study'])}</th><th class="num">{esc(L['col.cited'])}</th><th>{esc(L['col.link'])}</th><th>{esc(L['col.oa'])}</th></tr></thead>
   <tbody>{wrows}</tbody></table>
 
   <h2>{esc(L['safety'])}</h2>
@@ -313,6 +373,7 @@ def render(data, lang):
   <tbody>{srows}</tbody></table>
 
   {prisma_html}
+  {evidence_html}
 </div></body></html>"""
 
 

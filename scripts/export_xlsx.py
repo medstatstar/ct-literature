@@ -103,6 +103,7 @@ _LOCAL = {
     "col.cited":       {"en": "Cited by", "zh": "被引"},
     "col.is_safety":   {"en": "Safety", "zh": "安全性"},
     "col.url":         {"en": "Link", "zh": "链接"},
+    "col.oa":          {"en": "Open Access", "zh": "开放获取链接"},
     "col.mesh":        {"en": "MeSH", "zh": "MeSH"},
     "col.funders":     {"en": "Funders", "zh": "资助方"},
     "col.count":       {"en": "Count", "zh": "数量"},
@@ -146,6 +147,26 @@ _LOCAL = {
     "caveat.title":    {"en": "Data caveats", "zh": "数据局限"},
     "caveat.text":     {"en": "① OpenAlex is the primary source; Europe PMC / Semantic Scholar are optional enrichments. ② Abstract availability depends on the source (Europe PMC ≈100%, OpenAlex partial). ③ Deduplicated by DOI / title; multi-source works keep provenance. ④ This is published-literature evidence, NOT trial-registry metadata (see ct-registry); the safety subset is qualitative, not FAERS quantitative signal.",
                        "zh": "① OpenAlex 为主源，Europe PMC / Semantic Scholar 为可选增强；② 摘要可用性取决于来源（Europe PMC ≈100%，OpenAlex 部分缺失）；③ 按 DOI / 标题去重，多源文献保留来源溯源；④ 本表为已发表文献证据，非试验注册信息（见 ct-registry）；安全性子集为定性证据，非 FAERS 定量信号。"},
+    # ---- evidence log (P0: provenance + citation verification, ct-base §17.1) ----
+    "sheet.evidence":   {"en": "Evidence Log", "zh": "证据溯源"},
+    "ev.title":        {"en": "Evidence Provenance & Citation Verification", "zh": "证据溯源与引文验证"},
+    "ev.generated":    {"en": "Generated", "zh": "生成时间"},
+    "ev.verify":       {"en": "Citation verification", "zh": "引文验证"},
+    "ev.verified":     {"en": "Verified", "zh": "已验证"},
+    "ev.unresolved":   {"en": "Unresolved", "zh": "未解析"},
+    "ev.no_id":        {"en": "No identifier", "zh": "无标识"},
+    "ev.suspicious":   {"en": "Suspicious", "zh": "可疑"},
+    "ev.preview":      {"en": "preview — verification skipped", "zh": "预览，已跳过验证"},
+    "ev.src":          {"en": "Source", "zh": "来源"},
+    "ev.query":        {"en": "Query", "zh": "检索式"},
+    "ev.type":         {"en": "Type", "zh": "类型"},
+    "ev.year":         {"en": "Year", "zh": "年份"},
+    "ev.safety":       {"en": "Safety", "zh": "安全性"},
+    "ev.count":        {"en": "Count", "zh": "数量"},
+    "ev.retrieved":    {"en": "Retrieved", "zh": "检索时间"},
+    "ev.status":       {"en": "Status", "zh": "状态"},
+    "ev.note":         {"en": "Provenance audit trail (ct-base §17.1): every evidence item is traceable to its source query and retrieval time. Verification status is advisory, not a substitute for human review.",
+                       "zh": "证据溯源审计（ct-base §17.1）：每条证据可回溯至来源检索式与检索时间；验证状态仅供参考，不替代人工核查。"},
 }
 
 
@@ -308,7 +329,8 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0):
             ("study_type", t("col.study_type"), 20),
             ("cited_by_count", t("col.cited"), 10),
             ("is_safety", t("col.is_safety"), 10),
-            ("url", t("col.url"), 22)]
+            ("url", t("col.url"), 22),
+            ("open_access_url", t("col.oa"), 28)]
     ws.set_row(start_row, HEADER_H)
     for ci, (_, h, _) in enumerate(cols):
         ws.write(start_row, ci, h, fmts["header"])
@@ -333,6 +355,12 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0):
                     ws.write_url(ri, ci, link, fmts["link"], string=str(v)[:42])
                 else:
                     ws.write(ri, ci, str(v)[:42] if v else "", row_fmt)
+            elif key == "open_access_url":
+                oa = _normalize_link(v)
+                if oa:
+                    ws.write_url(ri, ci, oa, fmts["link"], string="OA PDF")
+                else:
+                    ws.write(ri, ci, "—", row_fmt)
             elif key == "cited_by_count":
                 ws.write(ri, ci, v if v is not None else 0, fmts["right"])
             else:
@@ -348,12 +376,13 @@ def build_works(wb, data, fmts, safety_hl):
     n = _write_works_table(ws, works, fmts, safety_hl)
     ws.freeze_panes(1, 0)
     if works:
-        ws.autofilter(0, 0, n, 9)
+        ws.autofilter(0, 0, n, 11)
     for ci, (_, _, w) in enumerate([("source", "", 14), ("year", "", 8),
                                     ("title", "", 52), ("authors", "", 34),
                                     ("publication", "", 26), ("type", "", 14),
                                     ("study_type", "", 20), ("cited", "", 10),
-                                    ("safety", "", 10), ("url", "", 22)]):
+                                    ("safety", "", 10), ("url", "", 22),
+                                    ("open_access_url", "", 28)]):
         ws.set_column(ci, ci, w)
     return ws
 
@@ -490,6 +519,87 @@ def build_safety(wb, data, fmts, safety_hl):
 # ═══════════════════════════════════════════════════════════════════════════
 # entry point
 # ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# evidence log (P0: provenance + citation verification, ct-base §17.1)
+# ═══════════════════════════════════════════════════════════════
+def build_evidence(wb, data, fmts):
+    ws = wb.add_worksheet(t("sheet.evidence"))
+    _page_decor(ws, t("sheet.evidence"), fmts)
+    ws.set_tab_color(NAVY)
+    _banner(ws, 0, 0, 12, t("ev.title"), fmts)
+    ws.set_row(0, 30)
+    evidence = data.get("evidence_log") or {}
+    verification = data.get("verification") or {}
+    r = 2
+
+    # generated time
+    if evidence.get("generated_at"):
+        ws.write(r, 0, t("ev.generated"), fmts["kpi_label"])
+        ws.merge_range(r, 1, r, 12, evidence["generated_at"], fmts["body"])
+        r += 1
+
+    # citation verification summary block
+    if verification:
+        ws.write(r, 0, t("ev.verify"), fmts["sub"])
+        r += 1
+        skip = (" " + t("ev.preview")) if verification.get("skipped_preview") else ""
+        vrows = [
+            (t("ev.verified"), verification.get("verified", 0)),
+            (t("ev.unresolved"), verification.get("unresolved", 0)),
+            (t("ev.no_id"), verification.get("no_identifier", 0)),
+            (t("ev.suspicious"), verification.get("suspicious", 0)),
+        ]
+        ws.write(r, 0, "total", fmts["fkey"])
+        ws.merge_range(r, 1, r, 2, verification.get("total", 0), fmts["right"])
+        r += 1
+        for label, cnt in vrows:
+            ws.write(r, 0, label, fmts["fkey"])
+            ws.merge_range(r, 1, r, 2, cnt, fmts["right"])
+            r += 1
+        ws.merge_range(r, 0, r, 12, ("verified=%s · unresolved=%s · no_identifier=%s · "
+                                     "suspicious=%s%s" % (
+                                         verification.get("verified", 0),
+                                         verification.get("unresolved", 0),
+                                         verification.get("no_identifier", 0),
+                                         verification.get("suspicious", 0), skip)), fmts["note"])
+        r += 2
+
+    # source provenance table
+    srcs = evidence.get("sources") or []
+    if srcs:
+        ws.write(r, 0, t("ev.src") + " provenance / 来源溯源", fmts["sub"])
+        r += 1
+        headers = [t("ev.src"), t("ev.query"), t("ev.type"), t("ev.year"),
+                   t("ev.safety"), t("ev.count"), t("ev.retrieved"), t("ev.status")]
+        for ci, h in enumerate(headers):
+            ws.write(r, ci, h, fmts["header"])
+        r += 1
+        for s in srcs:
+            yf = s.get("year_from") or ""
+            yt_ = s.get("year_to") or ""
+            yr = ("%s–%s" % (yf, yt_)) if (yf or yt_) else "—"
+            row = [s.get("source"), (s.get("query") or "")[:120],
+                   s.get("review_type") or "all", yr,
+                   "Y" if s.get("safety") else "—", s.get("count", 0),
+                   (s.get("retrieved_at") or "")[:19], s.get("status", "")]
+            for ci, v in enumerate(row):
+                ws.write(r, ci, v, fmts["plain"])
+            r += 1
+        r += 1
+
+    # caveat callout
+    ws.merge_range(r, 0, r + 2, 12, t("ev.note"), fmts["warn"])
+    ws.set_row(r, 18)
+    ws.set_row(r + 1, 18)
+    ws.set_row(r + 2, 18)
+
+    ws.set_column(0, 0, 16)
+    ws.set_column(1, 1, 50)
+    for col in range(2, 8):
+        ws.set_column(col, col, 14)
+    return ws
+
+
 def _coerce_int(v):
     """Coerce a possibly string/None numeric field to int, else None."""
     if isinstance(v, bool):
@@ -556,6 +666,7 @@ def export_workbook(data, out_path, lang="auto"):
     build_overview(wb, data, fmts)
     build_works(wb, data, fmts, fmts["safety_hl"])
     build_safety(wb, data, fmts, fmts["safety_hl"])
+    build_evidence(wb, data, fmts)
     wb.close()
 
 

@@ -22,6 +22,7 @@ RUNS = os.path.join(HERE, "scenario10b_run")
 DATE = datetime.date.today().isoformat()
 
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "adapters"))
 import scenario10b as S  # noqa: E402
 
 os.makedirs(RESULTS, exist_ok=True)

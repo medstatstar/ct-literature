@@ -25,7 +25,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import http_utils  # shared UA + key loaders (no key needed here, reused for consistency)
+from adapters import http_utils  # shared UA + key loaders (no key needed here, reused for consistency)
 
 BASE = "https://export.arxiv.org/api/query"
 

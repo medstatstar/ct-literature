@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import http_utils  # shared GET+retry (exponential backoff, 429 Retry-After, Bearer key)
+from adapters import http_utils  # shared GET+retry (exponential backoff, 429 Retry-After, Bearer key)
 
 try:
     import requests  # optional; reserved for future requests-path use

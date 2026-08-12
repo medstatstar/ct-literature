@@ -27,8 +27,12 @@
 | 源 | 密钥 | 角色 |
 |---|---|---|
 | OpenAlex | 推荐 key（免费 100k/天，技能 `.env` 自动加载）；无 key 限 100/天（2026-02-13 起） | **主源** — 覆盖广、含引用数 |
-| Europe PMC | 无需 | 可选 `--with-europepmc` — MEDLINE/MeSH 生物医学精准 |
+| Europe PMC | 无需 | **默认开启**（`--no-with-europepmc` 关闭） — MEDLINE/MeSH 生物医学精准 |
 | Semantic Scholar | 无需（易 429） | 可选 `--with-semantic-scholar` — 引用排序；**无 key / 429 时自动跳过** |
+| bioRxiv | 无需（经 Europe PMC PPR） | 可选 `--with-biorxiv` — 生物医学预印本 |
+| medRxiv | 无需（经 Europe PMC PPR） | 可选 `--with-medrxiv` — 医学/临床预印本 |
+| arXiv | 无需 | 可选 `--with-arxiv` — 物理/CS/ML 方法学广度 |
+| PROSPERO | 需 token（认证头未公开） | 可选 `--with-prospero` — 系统评价注册库 / 方案发现；**保留接口**，未提供可用 token+header 前自动降级为空跳过 |
 
 ## 1. 如何在对话里使用（核心）
 
@@ -118,6 +122,13 @@ ct-literature 是一个**对话式技能**：你只要把想查的内容告诉�
 | Excel 交付物 | "把文献导出成 Excel 文件" |
 | 仅 Markdown 报告 | "只给我 Markdown 报告，跳过 Excel" |
 
+### ③b 证据验证与溯源（P0，默认开启）
+| 场景 | 试试这样说 |
+|:---|:---|
+| 验证每条 DOI/PMID 真实存在（反幻觉） | "报告前先核实引文是不是真的" |
+| 追溯每条命中的来源 | "给我看证据溯源 / 来源日志" |
+| 跳过验证（更快、仅预览） | "这次先不验证引文" |
+
 ### ④ Key / 配置
 | 场景 | 试试这样说 |
 |:---|:---|
@@ -139,6 +150,23 @@ ct-literature 是一个**对话式技能**：你只要把想查的内容告诉�
 **Q：中文系统下输出是中文吗？** A：是。输出语言默认跟随系统（中文系统→中文，其他→英文），随时一句话强制切换（如"用中文回复" / "switch to English"）。
 
 **Q：Semantic Scholar 老是失败 / 被跳过？** A：S2 的 key 需填表人工审核、非自动发放，申请后需等待，短期内通常无 key。未配置 key 时本源被**直接跳过**（不发起网络请求），而非尝试后降级。若需要引用排序，之后配置即可。
+
+**Q：一次检索要跑多久？有限额吗？** A：
+- **典型耗时**：各启用源串行执行；Europe PMC ~1秒/页，OpenAlex ~2秒/页。拉取约 50 篇文献的 3 源合并通常 **10–30 秒**完成。加预印本（bioRxiv/medRxiv/arXiv）再多数秒。
+- **结果上限**：默认 `max_results` 控制每次合并的最大文献数；调高会线性增加耗时与 API 用量。
+- **速率限制：**
+  - **OpenAlex（无 key）：** 100 credits/天（2026-02-13 起）。一次多页检索可用 5–20 credits。免费 key 可提到 **100k/天**。
+  - **Europe PMC：** 无严格 key 限制，但请合理控制请求频率（不要高频循环调用）。
+  - **Semantic Scholar（无 key）：** 极易触发 HTTP 429；未配置 key 时技能会直接跳过本源。
+- **建议**：先用默认源（OpenAlex + Europe PMC）+ 适中 `max_results` 起步；仅在确实需要更广覆盖时再加装额外源。
+
+**Q：能下载全文 PDF 吗？** A：Excel 与 HTML 报告包含**「开放获取链接」**列，当论文在出版社或存储库有免费 PDF 时直接链接（通常覆盖 60–80% 的近期文献）。付费墙论文该列显示「—」；本技能**不**绕过付费墙、不下载受版权保护的内容。获取付费墙论文全文请通过所在机构图书馆、文献传递或直接联系通讯作者。
+
+**Q：技能能协助从合法渠道下载 PDF 吗？** A：可以按需协助——但请注意：
+- **能做什么：** 给定 DOI 或 PMID，尝试从合法来源（Unpaywall、Europe PMC、PubMed Central 等）解析开放获取 PDF 链接。
+- **耗费警告**：每次请求至少涉及 1 次 HTTP 查询 + 到 PDF 的重定向链。50 篇文献的批量会增加 **1–3 分钟**额外时间，并消耗额外的 API 额度（OpenAlex/Europe PMC）。
+- **不保证成功**：许多论文没有合法开放获取副本。技能会明确告知哪些解析成功、哪些没有。
+- **如何请求**：提供具体的 DOI/PMID 列表（如从当前 merged.json 中筛选），并说"尝试为这些文献获取合法 OA PDF"。
 
 ---
 
@@ -199,6 +227,14 @@ python scripts/ct_literature.py --topic "osimertinib" \
 # 推荐（开箱即用）：把 key 放进技能目录 .env，之后无需任何额外参数
 cp .env.example .env          # 编辑 .env 填入 OPENALEX_API_KEY=你的key
 python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir ./out
+
+# P0 · 引文验证（默认开启）+ 证据日志在 --run 下自动产出；
+# 用 --no-verify-citations 可显式关闭验证。
+python scripts/ct_literature.py --topic "osimertinib" --run --out-dir ./out
+
+# P1 · PROSPERO 系统评价注册库（可选，保留接口，未提供 token 前自动空跳过）
+python scripts/ct_literature.py --topic "osimertinib" \
+    --with-prospero --prospero-token "$PROSPERO_API_TOKEN" --run --out-dir ./out
 ```
 
 ### 统一工作模式（输出 schema）
@@ -218,7 +254,7 @@ python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir .
 
 ---
 
-**版本**：v0.5.3 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+**版本**：v0.6.0 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：medstatstar@gmail.com（张文彤 / Wintone Zhang）。
 
@@ -226,7 +262,7 @@ python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir .
 
 ## 保密声明
 
-> CT 全系列技能由 16 余个技能构成，完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。然而，由于大量技能涉及药企需要严格保密的临床试验数据、内部资讯等敏感内容，仅有不涉密的 A、B 级别技能会在 GitHub 上公开发布；涉及保密的 C、D 级别技能（如 ct-analysis 等）均设定为企业内部使用。
+> CT 全系列技能由 20+ 个技能构成，完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。然而，由于大量技能涉及药企需要严格保密的临床试验数据、内部资讯等敏感内容，仅有不涉密的 A、B 级别技能会在 GitHub 上公开发布；涉及保密的 C、D 级别技能（如 ct-analysis 等）均设定为企业内部使用。
 
 > 若您对这些涉密技能确有实际需求，欢迎与作者联系，定制并安装相关技能。
 

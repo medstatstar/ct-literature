@@ -226,6 +226,47 @@ def render(works, meta=None):
                      "补充而非替代 FAERS 结构化信号检测。")
         lines.append("")
 
+    # ---- P0: evidence provenance + citation verification (ct-base §17.1) ----
+    evidence = meta.get("evidence_log") if isinstance(meta, dict) else None
+    verification = meta.get("verification") if isinstance(meta, dict) else None
+    if evidence or verification:
+        lines.append("### Evidence & verification / 证据溯源与引文验证\n")
+        if verification:
+            skip = " (preview — verification skipped, run `--run` to verify live)" \
+                   if verification.get("skipped_preview") else ""
+            lines.append("- **Citation verification / 引文验证**: "
+                         "total=%s · verified=%s · unresolved=%s · "
+                         "no_identifier=%s · suspicious=%s%s"
+                         % (verification.get("total", 0), verification.get("verified", 0),
+                            verification.get("unresolved", 0), verification.get("no_identifier", 0),
+                            verification.get("suspicious", 0), skip))
+            lines.append("")
+        if evidence:
+            srcs = evidence.get("sources") or []
+            if srcs:
+                lines.append("**Source provenance / 来源溯源**:\n")
+                lines.append("| Source / 来源 | Query / 检索式 | Type | Year | Safety | "
+                             "Count | Retrieved / 检索时间 | Status |")
+                lines.append("|---|---|---|---|---|---|---|---|")
+                for s in srcs:
+                    yf = s.get("year_from") or ""
+                    yt_ = s.get("year_to") or ""
+                    yr = ("%s–%s" % (yf, yt_)) if (yf or yt_) else "—"
+                    lines.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                        s.get("source"), (s.get("query") or "")[:80],
+                        s.get("review_type") or "all", yr,
+                        "Y" if s.get("safety") else "—", s.get("count", 0),
+                        (s.get("retrieved_at") or "")[:19], s.get("status", "")))
+                lines.append("")
+            if evidence.get("generated_at"):
+                lines.append("- **Generated / 生成时间**: %s" % evidence["generated_at"])
+                lines.append("")
+        lines.append("> Provenance audit trail (ct-base §17.1): every evidence item is traceable "
+                     "to its source query and retrieval time. Verification status is **advisory**, "
+                     "not a substitute for human review. / 证据溯源审计（ct-base §17.1）：每条证据"
+                     "可回溯至来源检索式与检索时间；验证状态仅供参考，不替代人工核查。")
+        lines.append("")
+
     return "\n".join(lines)
 
 

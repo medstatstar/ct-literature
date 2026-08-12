@@ -23,3 +23,6 @@ tests/scenario10c_x10.py
 # Python 缓存
 __pycache__/
 *.pyc
+
+# 一次性开发工具（迁移/批量修复脚本，非技能运行所需，不进发布包）
+tools/

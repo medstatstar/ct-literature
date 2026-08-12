@@ -28,6 +28,7 @@ DATE = datetime.date.today().isoformat()
 
 # 复用 scenario10 的 10 案例定义与底层工具
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "adapters"))
 from scenario10 import CASES, works_of, rec_count  # noqa: E402
 
 os.makedirs(RESULTS, exist_ok=True)
