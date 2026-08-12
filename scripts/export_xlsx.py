@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""export_xlsx.py - Export a ct-literature ``merged.json`` to a multi-sheet Excel
+"""export_xlsx.py - Export a ct-literature ``.merged.json`` to a multi-sheet Excel
 workbook (green theme, ct-base ``excel_style`` shared standard).
 
 Sheets (names localized):
@@ -156,7 +156,18 @@ _LOCAL = {
     "ev.unresolved":   {"en": "Unresolved", "zh": "未解析"},
     "ev.no_id":        {"en": "No identifier", "zh": "无标识"},
     "ev.suspicious":   {"en": "Suspicious", "zh": "可疑"},
+    "ev.mismatch":     {"en": "Mismatch", "zh": "不一致"},
+    "ev.mismatch.note": {"en": "identifier resolved to a LIVE resource but title/author do NOT match — possible hallucinated/incorrect id",
+                         "zh": "标识符解析到存活资源，但标题/作者不一致 —— 可能为幻觉或错误 id"},
     "ev.preview":      {"en": "preview — verification skipped", "zh": "预览，已跳过验证"},
+    "ev.verify.top":   {"en": "top-%s verified; remaining works not checked (--verify all for full)",
+                       "zh": "仅验证 top-%s；其余未核验（--verify all 全量）"},
+    "ev.verify.none":  {"en": "verification disabled (--verify none)",
+                       "zh": "已通过 --verify none 关闭核验"},
+    "ev.sampled":      {"en": "Sampled out", "zh": "抽样跳过"},
+    "ev.bot_blocked":  {"en": "Bot-blocked", "zh": "出版社拦爬"},
+    "ev.bot_blocked.note": {"en": "publisher returned 403 to automated access — DOI is real, not a broken link",
+                            "zh": "出版社对自动化访问回 403 —— DOI 真实有效、非断链"},
     "ev.src":          {"en": "Source", "zh": "来源"},
     "ev.query":        {"en": "Query", "zh": "检索式"},
     "ev.type":         {"en": "Type", "zh": "类型"},
@@ -166,6 +177,7 @@ _LOCAL = {
     "ev.retrieved":    {"en": "Retrieved", "zh": "检索时间"},
     "ev.status":       {"en": "Status", "zh": "状态"},
     "ev.note":         {"en": "Provenance audit trail (ct-base §17.1): every evidence item is traceable to its source query and retrieval time. Verification status is advisory, not a substitute for human review.",
+    "cfg.degraded":     {"en": "Degraded sources", "zh": "降级数据源"},
                        "zh": "证据溯源审计（ct-base §17.1）：每条证据可回溯至来源检索式与检索时间；验证状态仅供参考，不替代人工核查。"},
 }
 
@@ -538,16 +550,68 @@ def build_evidence(wb, data, fmts):
         ws.merge_range(r, 1, r, 12, evidence["generated_at"], fmts["body"])
         r += 1
 
+    # run-time config audit block (key status — avoids silently taking the wrong path)
+    cfg = evidence.get("config") or {}
+    if cfg:
+        ws.write(r, 0, "Run config / 运行配置", fmts["sub"])
+        r += 1
+        _cstat = lambda s: ("configured ✓" if s == "configured"
+                            else ("missing — keyless" if s == "missing" else str(s)))
+        for label, key in (("OpenAlex key", "openalex_key"),
+                           ("Semantic Scholar key", "semantic_scholar_key"),
+                           ("PROSPERO token", "prospero_token")):
+            val = cfg.get(key)
+            if val is None:
+                continue
+            ws.write(r, 0, label, fmts["fkey"])
+            ws.merge_range(r, 1, r, 12, _cstat(val), fmts["body"])
+            r += 1
+        # actionable follow-up: when the OpenAlex key is absent, show HOW to get one
+        # (status alone is not actionable for the user)
+        if cfg.get("openalex_key") == "missing":
+            _u = cfg.get("openalex_key_url") or "https://docs.openalex.org/about-openalex/api-key"
+            _m = ("⚠️ 未配置 OpenAlex key：本次为 keyless 模式（限 100 次/天，易 429）。"
+                  "免费申请后写入技能 `.env`（OPENALEX_API_KEY=<key>）：%s" % _u
+                  if _LANG == "zh" else
+                  "⚠️ OpenAlex key missing: this run used the keyless pool (100 credits/day, "
+                  "easily rate-limited). Apply for a FREE key and write it to the skill `.env` "
+                  "(OPENALEX_API_KEY=<key>): %s" % _u)
+            ws.merge_range(r, 0, r, 12, _m, fmts["body"])
+            r += 1
+        r += 1
+
+    # degraded sources (rate-limit / fetch failure) — friendly, actionable note
+    degraded = evidence.get("degraded") or []
+    if degraded:
+        ws.write(r, 0, t("cfg.degraded"), fmts["sub"])
+        r += 1
+        for _d in degraded:
+            _msg = _d.get("message_%s" % _LANG)  # xlsx auto-switches locale like the report
+            ws.write(r, 0, "⚠️ %s (%s)" % (_d.get("source"), _d.get("status")), fmts["fkey"])
+            ws.merge_range(r, 1, r, 12, _msg or "", fmts["body"])
+            r += 1
+        r += 1
+
     # citation verification summary block
     if verification:
         ws.write(r, 0, t("ev.verify"), fmts["sub"])
         r += 1
-        skip = (" " + t("ev.preview")) if verification.get("skipped_preview") else ""
+        if verification.get("skipped_preview"):
+            skip = " " + t("ev.preview")
+        elif verification.get("mode") == "top":
+            skip = " " + (t("ev.verify.top") % verification.get("top_n", 15))
+        elif verification.get("mode") == "none":
+            skip = " " + t("ev.verify.none")
+        else:
+            skip = ""
         vrows = [
             (t("ev.verified"), verification.get("verified", 0)),
+            (t("ev.bot_blocked"), verification.get("bot_blocked", 0)),
+            (t("ev.mismatch"), verification.get("mismatch", 0)),
             (t("ev.unresolved"), verification.get("unresolved", 0)),
             (t("ev.no_id"), verification.get("no_identifier", 0)),
             (t("ev.suspicious"), verification.get("suspicious", 0)),
+            (t("ev.sampled"), verification.get("unverified_sampled", 0)),
         ]
         ws.write(r, 0, "total", fmts["fkey"])
         ws.merge_range(r, 1, r, 2, verification.get("total", 0), fmts["right"])
@@ -556,12 +620,21 @@ def build_evidence(wb, data, fmts):
             ws.write(r, 0, label, fmts["fkey"])
             ws.merge_range(r, 1, r, 2, cnt, fmts["right"])
             r += 1
-        ws.merge_range(r, 0, r, 12, ("verified=%s · unresolved=%s · no_identifier=%s · "
-                                     "suspicious=%s%s" % (
+        _bb = verification.get("bot_blocked", 0)
+        _bb_note = (" — %s" % t("ev.bot_blocked.note")) if _bb else ""
+        _mm = verification.get("mismatch", 0)
+        _mm_note = (" — %s" % t("ev.mismatch.note")) if _mm else ""
+        ws.merge_range(r, 0, r, 12, ("verified=%s · bot-blocked=%s · mismatch=%s · "
+                                     "unresolved=%s · no_identifier=%s · suspicious=%s · "
+                                     "sampled=%s%s%s%s" % (
                                          verification.get("verified", 0),
+                                         _bb,
+                                         _mm,
                                          verification.get("unresolved", 0),
                                          verification.get("no_identifier", 0),
-                                         verification.get("suspicious", 0), skip)), fmts["note"])
+                                         verification.get("suspicious", 0),
+                                         verification.get("unverified_sampled", 0),
+                                         _bb_note, _mm_note, skip)), fmts["note"])
         r += 2
 
     # source provenance table
@@ -616,7 +689,7 @@ def _coerce_int(v):
 def sanitize(data):
     """Normalise a merged payload so mixed / missing types cannot crash sheets.
 
-    Real-world merged.json may carry year as str, cited_by_count as None,
+    Real-world .merged.json may carry year as str, cited_by_count as None,
     sources as None, or list fields holding None elements. Sorting or joining
     those raises TypeError deep inside a sheet builder and aborts the whole
     workbook, so we coerce once at the entry point.
@@ -649,6 +722,15 @@ def sanitize(data):
 
 def export_workbook(data, out_path, lang="auto"):
     data = sanitize(data)
+    # Promote provenance / verification blocks from `meta` when the caller passed
+    # them nested (the pipeline passes {count, works, meta}); the standalone CLI
+    # passes .merged.json which already has them at top level. Without this, the
+    # Evidence Log sheet renders EMPTY — verification stats, source provenance and
+    # run-config are all dropped (regression introduced at v0.6.8).
+    _meta = data.get("meta") or {}
+    for _k in ("evidence_log", "verification"):
+        if _k not in data and _meta.get(_k) is not None:
+            data[_k] = _meta[_k]
     if lang == "auto":
         set_lang("zh" if _base_is_chinese_os() else "en")
     elif lang == "zh":
@@ -671,8 +753,8 @@ def export_workbook(data, out_path, lang="auto"):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Export ct-literature merged.json to .xlsx")
-    ap.add_argument("--in-json", required=True, help="merged.json")
+    ap = argparse.ArgumentParser(description="Export ct-literature .merged.json to .xlsx")
+    ap.add_argument("--in-json", default=".merged.json", help=".merged.json (hidden intermediate)")
     ap.add_argument("--out", required=True, help="output .xlsx path")
     ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"])
     ap.add_argument("--topic", default=None, help="search topic (for README scope)")

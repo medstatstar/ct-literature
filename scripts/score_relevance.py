@@ -126,9 +126,9 @@ def score_works(works, topic=None, keywords=None):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Annotate merged.json works with a 0-1 relevance_score.")
-    ap.add_argument("--in", required=True, dest="inp", help="merged.json path")
-    ap.add_argument("--out", help="output merged.json (default: overwrite --in)")
+        description="Annotate .merged.json works with a 0-1 relevance_score.")
+    ap.add_argument("--in", default=".merged.json", dest="inp", help=".merged.json path")
+    ap.add_argument("--out", help="output .merged.json (default: overwrite --in)")
     ap.add_argument("--topic", default="", help="topic / drug / disease query")
     ap.add_argument("--keywords", default="", help="comma-separated extra keywords")
     ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"])

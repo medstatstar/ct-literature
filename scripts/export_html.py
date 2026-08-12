@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ct-literature → self-contained HTML report (no Excel needed to view).
 
-Reads `merged.json` (OpenAlex + Europe PMC merged evidence base) and renders a
+Reads `.merged.json` (OpenAlex + Europe PMC merged evidence base) and renders a
 single standalone .html file (inline CSS, safety-row highlight, source/type
 distributions as CSS bars) so content is fully readable in any browser / the
 WorkBuddy artifact preview without the client's limited xlsx viewer.
@@ -9,8 +9,8 @@ WorkBuddy artifact preview without the client's limited xlsx viewer.
 Theme: literature academic green, reusing vendored excel_style palette.
 
 Usage:
-    python export_html.py --in-json ../out_live/merged.json \
-                          --out ../out_live/merged.html --lang zh
+    python export_html.py --in-json ../out_live/.merged.json \
+                          --out ../out_live/lit_report.html --lang zh
 """
 import os, sys, json, html, argparse, datetime
 from collections import Counter
@@ -36,8 +36,15 @@ _LABELS = {
         "col.abstract": "Abstract", "overview": "Overview", "by_src": "By Source",
         "by_type": "By Type", "by_year": "By Year", "safety": "Safety / CSM Subset",
         "evidence": "Evidence & Verification", "ev.verify": "Citation verification",
-        "ev.verified": "Verified", "ev.unresolved": "Unresolved",
+        "ev.verified": "Verified", "ev.bot_blocked": "Bot-blocked",
+        "ev.bot_blocked.note": "publisher returned 403 to automated access — DOI is real, not a broken link",
+        "ev.unresolved": "Unresolved",
         "ev.no_id": "No identifier", "ev.suspicious": "Suspicious",
+        "ev.mismatch": "Mismatch",
+        "ev.mismatch.note": "identifier resolved to a LIVE resource but title/author do NOT match — possible hallucinated/incorrect id",
+        "cfg.warn": ("OpenAlex API key not configured — this run used the keyless pool "
+                     "(100 credits/day, easily rate-limited). Apply for a FREE key and write it "
+                     "to the skill `.env` as `OPENALEX_API_KEY=<key>`, then re-run for full coverage:"),
         "ev.preview": "preview — skipped", "ev.src": "Source", "ev.query": "Query",
         "ev.type": "Type", "ev.year": "Year", "ev.safety": "Safety",
         "ev.count": "Count", "ev.retrieved": "Retrieved", "ev.status": "Status",
@@ -53,8 +60,14 @@ _LABELS = {
         "col.abstract": "摘要", "overview": "概览", "by_src": "按来源", "by_type": "按类型",
         "by_year": "按年份", "safety": "安全性 / CSM 子集",
         "evidence": "证据溯源与引文验证", "ev.verify": "引文验证",
-        "ev.verified": "已验证", "ev.unresolved": "未解析",
+        "ev.verified": "已验证", "ev.bot_blocked": "出版社拦爬",
+        "ev.bot_blocked.note": "出版社对自动化访问回 403 —— DOI 真实有效、非断链",
+        "ev.unresolved": "未解析",
         "ev.no_id": "无标识", "ev.suspicious": "可疑",
+        "ev.mismatch": "不一致",
+        "ev.mismatch.note": "标识符解析到存活资源，但标题/作者不一致 —— 可能为幻觉或错误 id",
+        "cfg.warn": ("未配置 OpenAlex API key —— 本次以 keyless 模式运行（限 100 次/天，易触发 429 限流）。"
+                     "建议免费申请 key 并写入技能目录 `.env`（`OPENALEX_API_KEY=<key>`）后重跑以获得完整覆盖："),
         "ev.preview": "预览，已跳过", "ev.src": "来源", "ev.query": "检索式",
         "ev.type": "类型", "ev.year": "年份", "ev.safety": "安全性",
         "ev.count": "数量", "ev.retrieved": "检索时间", "ev.status": "状态",
@@ -258,11 +271,31 @@ def render(data, lang):
             skip = (" · " + esc(L["ev.preview"])) if verification.get("skipped_preview") else ""
             vsum = (f'<div class="ev-verify"><b>{esc(L["ev.verify"])}:</b> '
                     f'{esc(L["ev.verified"])}={verification.get("verified", 0)} · '
+                    f'{esc(L["ev.bot_blocked"])}={verification.get("bot_blocked", 0)} · '
+                    f'{esc(L["ev.mismatch"])}={verification.get("mismatch", 0)} · '
                     f'{esc(L["ev.unresolved"])}={verification.get("unresolved", 0)} · '
                     f'{esc(L["ev.no_id"])}={verification.get("no_identifier", 0)} · '
                     f'{esc(L["ev.suspicious"])}={verification.get("suspicious", 0)}'
                     f'{esc(skip)}</div>')
+            if verification.get("bot_blocked"):
+                vsum += (f'<div class="ev-verify-note">{esc(L["ev.bot_blocked"])}'
+                         f'={verification.get("bot_blocked", 0)}: '
+                         f'{esc(L["ev.bot_blocked.note"])}</div>')
+            if verification.get("mismatch"):
+                vsum += (f'<div class="ev-verify-note">{esc(L["ev.mismatch"])}'
+                         f'={verification.get("mismatch", 0)}: '
+                         f'{esc(L["ev.mismatch.note"])}</div>')
             blocks.append(vsum)
+        # run-time config audit: warn (with signup link) when the OpenAlex key is absent.
+        # The HTML report is the primary deliverable since v0.6.8 (lit_report.md dropped),
+        # so the key notice must live here too — otherwise it only exists in console output.
+        _cfg = (evidence.get("config") or {}) if isinstance(evidence, dict) else {}
+        if _cfg.get("openalex_key") == "missing":
+            _u = esc(_cfg.get("openalex_key_url") or
+                     "https://docs.openalex.org/about-openalex/api-key")
+            blocks.append(
+                f'<div class="ev-verify-note">⚠️ {esc(L["cfg.warn"])} '
+                f'<a href="{_u}" target="_blank" rel="noopener">{_u}</a></div>')
         srcs = (evidence.get("sources") or []) if isinstance(evidence, dict) else []
         if srcs:
             rows = "".join(
@@ -379,9 +412,10 @@ def render(data, lang):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--in-json", required=True)
+    ap.add_argument("--in-json", default=".merged.json",
+                    help=".merged.json (hidden intermediate from ct_literature)")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--lang", default="zh", choices=["zh", "en"])
+    ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"])
     args = ap.parse_args()
     data = json.load(open(args.in_json, encoding="utf-8"))
     html_out = render(data, args.lang)

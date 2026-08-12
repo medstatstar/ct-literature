@@ -63,55 +63,112 @@ class HttpError(Exception):
         return super().__str__()
 
 
-def get_json(url, headers=None, timeout=45, max_retries=4, backoff=2.0):
-    """GET `url` and parse JSON, with built-in exponential-backoff retries.
+class RateLimitError(HttpError):
+    """HTTP 429 — rate limit / quota exhausted.
 
-    Returns: parsed dict / list.
-    Raises: HttpError (retries exhausted or unrecoverable 4xx). Caller must
-    catch and degrade as needed.
+    Carries the server's suggested `retry_after` (seconds, may be None) and whether
+    the request was `keyless` (no Authorization header -> keyless pool, 100 credits/day).
+    Callers should treat this as a *degradation* signal: stop hammering the API, surface
+    a friendly notice, and continue with other sources instead of aborting.
+    """
+
+    def __init__(self, message, retry_after=None, keyless=False):
+        super().__init__(message, status=429, retryable=True)
+        self.retry_after = retry_after
+        self.keyless = keyless
+
+
+def _is_keyless(headers):
+    """True when no Authorization header is present -> the request hits the keyless pool."""
+    if not headers:
+        return True
+    for k in headers:
+        if k.lower() == "authorization":
+            return False
+    return True
+
+
+def _emit_429_notice(url, keyless, retry_after):
+    """Print a concise, localized notice on the FIRST 429 of a request so the user
+    sees the rate-limit event early (before retries finish). Never blocks execution."""
+    try:
+        from i18n import t
+        if keyless:
+            print(t("http.429.keyless_notice"))
+        else:
+            print(t("http.429.notice", secs=("%.0f" % retry_after) if retry_after else "—"))
+    except Exception:
+        print("[WARN] HTTP 429 rate limit hit on %s (keyless=%s)" % (_short(url), keyless))
+
+
+def _request_with_retry(url, headers=None, timeout=45, max_retries=4, backoff=2.0,
+                        rate_limit_max_retries=2):
+    """Single GET returning raw bytes, with unified retry/backoff.
 
     Retry policy:
-      - 429 / 5xx: retryable; wait = Retry-After (if present) or backoff**(attempt-1) seconds
-      - URLError / timeout / connection error: retryable; wait = backoff**(attempt-1) seconds
-      - 4xx (other than 429): non-retryable; raise immediately
+      - 429 + `Retry-After`: honor server's wait, retry up to `max_retries`
+      - 429 WITHOUT Retry-After (OpenAlex keyless pool returns this on quota
+        exhaustion, NOT transient): cap retries to `rate_limit_max_retries`, then
+        raise RateLimitError (fast give-up instead of blind 4x retries)
+      - 5xx / network / timeout: exponential backoff, retry up to `max_retries`
+      - other 4xx: non-retryable, raise immediately
     """
     hdrs = {"User-Agent": UA}
     if headers:
         hdrs.update(headers)
-
+    keyless = _is_keyless(hdrs)
+    rl_seen = 0
+    first_429 = False
     for attempt in range(1, max_retries + 1):
         try:
             req = urllib.request.Request(url, headers=hdrs)
             r = urllib.request.urlopen(req, timeout=timeout)
-            raw = r.read()
-            return json.loads(raw.decode("utf-8"))
+            return r.read()
         except urllib.error.HTTPError as e:
-            if e.code == 429 or 500 <= e.code < 600:
-                wait = _retry_after(e) or (backoff ** (attempt - 1))
-                print("[WARN] HTTP %s on %s (attempt %d/%d) -> retry in %.1fs"
-                      % (e.code, _short(url), attempt, max_retries, wait))
+            if e.code == 429:
+                rl_seen += 1
+                ra = _retry_after(e)
+                if not first_429:
+                    first_429 = True
+                    _emit_429_notice(url, keyless, ra)
+                if ra:
+                    wait = ra
+                    will_retry = attempt < max_retries
+                else:
+                    wait = backoff ** (attempt - 1)
+                    will_retry = attempt < max_retries and rl_seen <= rate_limit_max_retries
+                if will_retry:
+                    print("[WARN] HTTP 429 on %s (attempt %d/%d, keyless=%s) -> retry in %.1fs"
+                          % (_short(url), attempt, max_retries, keyless, wait))
+                    time.sleep(wait)
+                    continue
+                raise RateLimitError(
+                    "HTTP 429 after %d retry attempt(s) (keyless=%s)"
+                    % (rl_seen, keyless), retry_after=ra, keyless=keyless)
+            if 500 <= e.code < 600:
                 if attempt < max_retries:
+                    wait = backoff ** (attempt - 1)
+                    print("[WARN] HTTP %s on %s (attempt %d/%d) -> retry in %.1fs"
+                          % (e.code, _short(url), attempt, max_retries, wait))
                     time.sleep(wait)
                     continue
                 raise HttpError("HTTP %s after %d retries" % (e.code, max_retries),
                                 status=e.code, retryable=True)
-            # 4xx parameter error: non-retryable
-            raise HttpError("HTTP %s (non-retryable)" % e.code,
-                            status=e.code, retryable=False)
+            raise HttpError("HTTP %s (non-retryable)" % e.code, status=e.code, retryable=False)
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-            wait = backoff ** (attempt - 1)
-            print("[WARN] request error on %s (attempt %d/%d): %s -> retry in %.1fs"
-                  % (_short(url), attempt, max_retries, e, wait))
             if attempt < max_retries:
+                wait = backoff ** (attempt - 1)
+                print("[WARN] request error on %s (attempt %d/%d): %s -> retry in %.1fs"
+                      % (_short(url), attempt, max_retries, e, wait))
                 time.sleep(wait)
                 continue
             raise HttpError("request failed after %d retries: %s" % (max_retries, e),
                             retryable=True)
         except Exception as e:  # noqa: BLE001 - catch-all fallback, keep context
-            wait = backoff ** (attempt - 1)
-            print("[WARN] unexpected error on %s (attempt %d/%d): %s -> retry in %.1fs"
-                  % (_short(url), attempt, max_retries, e, wait))
             if attempt < max_retries:
+                wait = backoff ** (attempt - 1)
+                print("[WARN] unexpected error on %s (attempt %d/%d): %s -> retry in %.1fs"
+                      % (_short(url), attempt, max_retries, e, wait))
                 time.sleep(wait)
                 continue
             raise HttpError("unexpected failure after %d retries: %s" % (max_retries, e),
@@ -119,52 +176,39 @@ def get_json(url, headers=None, timeout=45, max_retries=4, backoff=2.0):
     raise HttpError("unreachable retry loop", retryable=True)
 
 
-def get_text(url, headers=None, timeout=45, max_retries=4, backoff=2.0):
+def get_json(url, headers=None, timeout=45, max_retries=4, backoff=2.0,
+             rate_limit_max_retries=2):
+    """GET `url` and parse JSON, with built-in exponential-backoff retries.
+
+    Returns: parsed dict / list.
+    Raises:
+      - HttpError: retries exhausted or unrecoverable 4xx.
+      - RateLimitError: HTTP 429 (a *degradation* signal — see RateLimitError).
+        Callers must catch it and continue with other sources.
+
+    Retry policy:
+      - 429 + Retry-After: honor server wait, retry up to `max_retries`
+      - 429 without Retry-After (keyless quota exhaustion): cap to
+        `rate_limit_max_retries` then raise RateLimitError (fail fast)
+      - 5xx / network / timeout: exponential backoff, retry up to `max_retries`
+      - 4xx (other than 429): non-retryable; raise immediately
+    """
+    raw = _request_with_retry(url, headers, timeout, max_retries, backoff,
+                              rate_limit_max_retries)
+    return json.loads(raw.decode("utf-8"))
+
+
+def get_text(url, headers=None, timeout=45, max_retries=4, backoff=2.0,
+             rate_limit_max_retries=2):
     """GET `url` and return decoded text, with built-in exponential-backoff retries.
 
     Used by sources (e.g. PROSPERO) that may return non-JSON (XML) payloads.
     Returns decoded str (lossy replacement on bad bytes). Mirrors get_json's retry
-    policy; on exhaust/4xx raises HttpError for the caller to degrade.
+    policy (incl. RateLimitError on 429); caller degrades as needed.
     """
-    hdrs = {"User-Agent": UA}
-    if headers:
-        hdrs.update(headers)
-    for attempt in range(1, max_retries + 1):
-        try:
-            req = urllib.request.Request(url, headers=hdrs)
-            r = urllib.request.urlopen(req, timeout=timeout)
-            return r.read().decode("utf-8", "replace")
-        except urllib.error.HTTPError as e:
-            if e.code == 429 or 500 <= e.code < 600:
-                wait = _retry_after(e) or (backoff ** (attempt - 1))
-                print("[WARN] HTTP %s on %s (attempt %d/%d) -> retry in %.1fs"
-                      % (e.code, _short(url), attempt, max_retries, wait))
-                if attempt < max_retries:
-                    time.sleep(wait)
-                    continue
-                raise HttpError("HTTP %s after %d retries" % (e.code, max_retries),
-                                status=e.code, retryable=True)
-            raise HttpError("HTTP %s (non-retryable)" % e.code,
-                            status=e.code, retryable=False)
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-            wait = backoff ** (attempt - 1)
-            print("[WARN] request error on %s (attempt %d/%d): %s -> retry in %.1fs"
-                  % (_short(url), attempt, max_retries, e, wait))
-            if attempt < max_retries:
-                time.sleep(wait)
-                continue
-            raise HttpError("request failed after %d retries: %s" % (max_retries, e),
-                            retryable=True)
-        except Exception as e:  # noqa: BLE001
-            wait = backoff ** (attempt - 1)
-            print("[WARN] unexpected error on %s (attempt %d/%d): %s -> retry in %.1fs"
-                  % (_short(url), attempt, max_retries, e, wait))
-            if attempt < max_retries:
-                time.sleep(wait)
-                continue
-            raise HttpError("unexpected failure after %d retries: %s" % (max_retries, e),
-                            retryable=True)
-    raise HttpError("unreachable retry loop", retryable=True)
+    raw = _request_with_retry(url, headers, timeout, max_retries, backoff,
+                              rate_limit_max_retries)
+    return raw.decode("utf-8", "replace")
 
 
 def build_openalex_headers(api_key=None, mailto="dev@example.com"):
@@ -222,6 +266,22 @@ def get_openalex_key(env_var="OPENALEX_API_KEY"):
     return load_openalex_key(env_var)
 
 
+def get_openalex_key_status(env_var="OPENALEX_API_KEY"):
+    """Return a SAFE status string only ('configured' | 'missing').
+
+    Used by the provenance audit trail so the evidence log records whether a
+    keyed source was used or the search fell back to keyless mode — this avoids
+    silently taking the wrong (throttled) path. The key VALUE itself is never
+    returned (ct-base §5: no credentials in logs).
+    """
+    return "configured" if load_openalex_key(env_var) else "missing"
+
+
+# Public, free OpenAlex registration URL (keyless runs are rate-limited to
+# 100 credits/day since 2026-02-13; a key raises this dramatically).
+OPENALEX_SIGNUP_URL = "https://docs.openalex.org/about-openalex/api-key"
+
+
 def build_s2_headers(api_key=None):
     """Build Semantic Scholar request headers: optional `x-api-key` for the keyed pool
     (much looser rate limit).
@@ -266,6 +326,23 @@ def load_s2_key(env_var="SEMANTIC_SCHOLAR_API_KEY"):
         except Exception:
             pass
     return None
+
+
+def key_status(api_key=None, env_var="OPENALEX_API_KEY"):
+    """Return the *presence* of a configured API key as a machine-readable status
+    string — never the key itself.
+
+    Returns one of:
+      "configured"  — a key was resolved for this run (env / .env / explicit arg)
+      "missing"     — no key found; the skill runs keyless (rate-limited) or skips
+      "not-required" — this source needs no key at all (e.g. Europe PMC)
+    Used by the evidence log so a run records which sources had keys and which
+    degraded to keyless / were skipped — "which path did this run take".
+    """
+    if api_key:
+        return "configured"
+    resolved = load_openalex_key(env_var)
+    return "configured" if resolved else "missing"
 
 
 # Module-level guard so the "no key" notice prints at most once per process.
@@ -322,7 +399,7 @@ def notify_openalex_key_if_missing(api_key=None, env_var="OPENALEX_API_KEY"):
         _KEY_NOTICE_SHOWN = True
         return
     from i18n import t
-    print(t("openalex.key_notice"))
+    print(t("openalex.key_notice", url=OPENALEX_SIGNUP_URL))
     _KEY_NOTICE_SHOWN = True
 
 

@@ -3,7 +3,7 @@
 """
 zotero_exporter.py — Zotero / 文献管理软件集成（升级项 F）.
 
-将 merged.json 导出为 Zotero 可导入的格式：
+将 .merged.json 导出为 Zotero 可导入的格式：
   - zotero.csv   标准 Zotero CSV 列（作者用 "||" 分隔，标签用 "||" 分隔，
                   与 Zotero 自身导出格式一致，可往返导入）
   - zotero.ris   通用 RIS 书目交换格式（Zotero 原生支持，最稳妥的导入路径）
@@ -11,7 +11,7 @@ zotero_exporter.py — Zotero / 文献管理软件集成（升级项 F）.
 纯本地、零联网、仅依赖标准库。可被 ct_literature.py 流水线直接调用，
 也可作为独立 CLI 运行：
 
-  python zotero_exporter.py --in merged.json --out-dir ./out
+  python zotero_exporter.py --in .merged.json --out-dir ./out
 
 说明：CSV 为便捷格式（列名对齐 Zotero 导入约定）；RIS 为跨平台书目交换的
 权威格式，建议优先用 RIS 导入 Zotero。
@@ -117,8 +117,8 @@ def export_zotero(merged, out_dir=".", lang="auto"):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Export merged.json to Zotero CSV/RIS.")
-    ap.add_argument("--in", dest="inp", required=True, help="merged.json path")
+    ap = argparse.ArgumentParser(description="Export .merged.json to Zotero CSV/RIS.")
+    ap.add_argument("--in", default=".merged.json", dest="inp", help=".merged.json path")
     ap.add_argument("--out-dir", default=".", help="output directory")
     ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"])
     args = ap.parse_args()

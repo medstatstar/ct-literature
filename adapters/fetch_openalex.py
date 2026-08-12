@@ -206,6 +206,11 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
         return None
 
     http_utils.notify_openalex_key_if_missing(api_key)
+    # run() passes api_key=None by default; re-resolve from env/.env so the actual
+    # request uses the keyed pool (Bearer) instead of silently falling back to the
+    # throttled keyless pool. This is the "right path" the config audit guards against.
+    if api_key is None:
+        api_key = http_utils.load_openalex_key()
     filt = ["has_doi:true"]
     oa_type = _openalex_type_for(review_type)
     if oa_type:
@@ -252,9 +257,15 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
         headers = http_utils.build_openalex_headers(api_key=api_key, mailto=mailto)
         try:
             j = http_utils.get_json(url, headers=headers, timeout=45, max_retries=4)
+        except http_utils.RateLimitError as e:
+            # Propagate as a degradation signal (do NOT silently return 0 works):
+            # the caller's parallel wrapper catches it and records a friendly notice.
+            print("[WARN] OpenAlex rate-limited (HTTP 429%s): %s"
+                  % (" keyless" if e.keyless else "", e))
+            raise
         except http_utils.HttpError as e:
             print("[WARN] OpenAlex request failed: %s" % e)
-            break
+            raise
         results = j.get("results", [])
         if not results:
             break

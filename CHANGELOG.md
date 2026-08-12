@@ -3,6 +3,178 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.6.11 — 2026-08-12
+
+### Feature · title/author consistency cross-check in citation verification (anti-hallucination depth)
+- Closes the gap flagged in v0.6.10: verification previously only confirmed an identifier
+  *resolves to a live resource*. A hallucinated-but-real DOI (or a real-but-wrong id) still
+  passed. Now, after an identifier resolves, the canonical metadata (title + first-author
+  surname) is fetched from the authoritative, bot-friendly API and compared to the work we hold:
+  - DOI  -> Crossref (`api.crossref.org/works/<doi>`)
+  - PMID -> Europe PMC EXT_ID response (already fetched for resolution, no extra call)
+  - OpenAlex id -> `api.openalex.org/works/<id>`
+- New status **`mismatch`**: identifier resolved to a LIVE resource but its title/author do
+  **not** match this work → flagged `citation_verified=False`, surfaced in all four deliverables
+  (xlsx Evidence Log, html Evidence block, report, evidence_log.md) as **Mismatch / 不一致**.
+  A consistent resolution is `verified`; a `bot_blocked` DOI whose Crossref metadata matches is
+  now **upgraded to `verified`** (the 403 was only the publisher blocking doi.org, not the id).
+- Robust by design:
+  - Author matching is **order-independent** (handles "Last, First", "First Last", "First Initial"
+    and list forms) via token-set membership against the metadata surname — fixes a naive
+    "last token = surname" bug that misread "Ramalingam V" as surname "V".
+  - Title match uses normalized `difflib` similarity (threshold 0.80) + author must not contradict.
+  - Metadata **fetch failure / incomplete fields degrade gracefully** to "verified, consistency
+    unchecked" — it NEVER invents a `mismatch` from a transient API error.
+  - New additive per-work fields: `citation_consistency` (bool|None), `citation_title_ratio` (float|None).
+- New opt-out: `--no-consistency` (pipeline `run()`) / `--no-consistency` (standalone
+  `verify_citations.py`) skips the metadata fetch; verification then behaves as before v0.6.11.
+- Verified: offline mock test (9 cases: match / mismatch / meta-fail / malformed / no-id /
+  empty-meta / bot-block+match / pmid-path+match / no-consistency) all pass; EN+ZH render smoke
+  test confirms `Mismatch / 不一致` surfaces in xlsx + html + evidence_log + report without crash.
+
+### Docs · README + SKILL.md accuracy & clarity pass
+- `README.md` / `README_zh-CN.md` restructured for clarity: added a **Table of Contents**
+  anchor nav; renumbered sections (Who This Is For → Data Sources → Anti-Hallucination →
+  How to Use → Scenarios → FAQ → Security → Advanced); compacted the scenario index.
+- Fixed factual inaccuracies carried from earlier versions:
+  - Version string `0.6.0` → `0.6.11`.
+  - Dropped the false `requests` dependency claim — the skill uses **only the standard-library
+    `urllib`**.
+  - Architecture tree realigned to the actual layout: `adapters/` holds the 6 source fetchers +
+    `http_utils` + `verify_citations`; `normalize` / `score_relevance` / `screen_prisma` /
+    `format_citations` / `evidence_log` / `obsidian_exporter` / `zotero_exporter` / `export_*`
+    live in `scripts/` (not `adapters/`). Output described as **HTML + Excel**, not Markdown.
+  - Anti-Hallucination expanded to **4 guardrails** (was described as 3) incl. the v0.6.11
+    title/author consistency layer; added `bot_blocked` + `mismatch` explanations and the
+    `citation_*` schema fields.
+  - Unified EN/ZH on **parallel** source execution (ZH previously said "serial").
+  - Removed stale `.merged.json` references from the OA-PDF scenario (the file is now hidden /
+    internal, not a user-facing artifact).
+- `SKILL.md` `version:` bumped `0.6.0` → `0.6.11` to match CHANGELOG and the READMEs.
+
+## v0.6.10 — 2026-08-12
+
+### Logic audit · systematic bug sweep (HIGH + MEDIUM + LOW)
+
+Systematic review of the whole skill (pipeline `run()`, every `scripts/*` exporter, both
+adapters, i18n messages, formatters, docs) after the v0.6.8 output-cleanup refactor.
+
+- **HIGH · `lit_report.xlsx` Evidence Log sheet rendered empty (v0.6.8 regression).**
+  The pipeline `run()` passed `export_workbook({"count", "works", "meta"})` but
+  `build_evidence` reads `evidence_log` / `verification` from the **top level** of `data`.
+  So the Verification summary, source provenance and run-config blocks were all dropped —
+  the sheet showed only its title + the anti-hallucination disclaimer.
+  Fix: `export_workbook` now promotes `evidence_log` / `verification` out of `meta` when they
+  are missing at top level (standalone CLI still passes `.merged.json` with them at top level).
+  Verified by regenerating an xlsx from a real `.merged.json` — `verified=…`, `bot-blocked=…`,
+  `Run config / 运行配置`, and source provenance all appear again.
+- **MEDIUM · `evidence_log.py` standalone CLI lost its source trail.**
+  `main()` read `data.get("payloads")`, but `.merged.json` persists `evidence_log` and does **not**
+  persist `payloads`, so the rendered `evidence_log.md` had an empty source list.
+  Fix: prefer the `evidence_log` already embedded in `.merged.json`; only fall back to
+  rebuilding from `payloads` when it is absent.
+- **LOW · DOI regex greedily swallowed trailing punctuation.**
+  `_DOI_RE` used `[^\s]+`, so a trailing `.` / `)` / `]` etc. was captured into the DOI, producing
+  links/labels like `10.1056/NEJMoa2403614.)`. Fixed in two places with a `_strip_doi_tail()`
+  helper that strips `.,;:` then `)]` separately (the two-stage rstrip also avoids a Python
+  parsing ambiguity when `)]` sits next to a string literal):
+  `scripts/normalize.py::_norm_doi` and `adapters/verify_citations.py::_resolve_doi` / `work_key`.
+- **Doc consistency · `merged.html` → `lit_report.html`.**
+  `SKILL.md` (feature table + Output list) and `export_html.py` docstring still said `merged.html`;
+  the pipeline has written `lit_report.html` since before v0.6.8. Corrected both.
+- Verified: all four modified `.py` files `py_compile` clean; xlsx Evidence Log regen smoke test passes.
+
+## v0.6.9 — 2026-08-12
+
+### Fix · restore the "apply for an OpenAlex key" prompt in the deliverables
+- Regression from v0.6.8: the keyless warning (`cfg.warn`, with the signup URL) lived in
+  `report.py` / `lit_report.md`, which v0.6.8 stopped generating. After that the prompt
+  survived only in console output and `evidence_log.md` — the two primary deliverables
+  (HTML / XLSX) carried no actionable hint.
+- `export_html.py`: added bilingual `cfg.warn` labels and render a warning block with a
+  clickable signup link inside the Evidence section when `config.openalex_key == "missing"`.
+- `export_xlsx.py`: the Run-config block now appends an actionable bilingual line with the
+  signup URL when the key is missing (previously it only printed `missing — keyless`).
+- No prompt is shown when the key is configured (verified by render smoke test, EN + ZH).
+
+## v0.6.8 — 2026-08-12
+
+### Output cleanup · drop `lit_report.md`; demote `merged.json` to hidden `.merged.json`
+- Stop generating `lit_report.md` (the Markdown report). `lit_report.html` + `lit_report.xlsx`
+  already cover the same content, so the `.md` deliverable was redundant. `report.py` stays in the
+  skill as a reusable standalone Markdown renderer but is no longer called by the pipeline.
+- Rename the unified work list from `merged.json` to `.merged.json` (dot-prefixed → normally hidden
+  by the OS). It is now an **internal cache**, not a user-facing deliverable.
+- All standalone tools (`export_html` / `export_xlsx` / `format_citations` / `obsidian_exporter` /
+  `zotero_exporter` / `score_relevance` / `screen_prisma` / `evidence_log` + `verify_citations`) now
+  default `--in` / `--in-json` / `--merged` to `.merged.json` (no longer `required`), so they keep
+  working out-of-the-box against the hidden cache. Docstrings/help text updated accordingly.
+- Docs (`SKILL.md` Output list; `README.md` / `README_zh-CN.md` report + OA-PDF references) updated:
+  `lit_report.md` removed; `merged.json` → `.merged.json`; PRISMA block reference updated.
+- Pre-existing (out of scope at v0.6.8, **resolved in v0.6.10**): `SKILL.md` still named the HTML
+  deliverable `merged.html`, but the pipeline writes `lit_report.html`. Now fixed in both the
+  feature table and the Output list; `export_html.py` docstring example updated too.
+
+## v0.6.7 — 2026-08-12
+
+### Bugfix · `evidence_log.md` bot-blocked label not localized (follow-up to v0.6.6)
+- v0.6.6 localized the `bot_blocked` label in `report.py` / `export_xlsx.py` / `export_html.py`
+  (`ev.bot_blocked`: "bot-blocked" / "出版社拦爬") but `evidence_log.py::render_md` still
+  hard-coded the English `bot-blocked=` token. In a zh locale the report said `出版社拦爬=0`
+  while the evidence log said `bot-blocked=0` — inconsistent.
+- `render_md` now emits `bot-blocked=%s (出版社拦爬=%s)` so the zh label is present alongside
+  the English key in the bilingual evidence log. Regenerated `out_lit_osimertinib_v6/evidence_log.md`.
+
+## v0.6.6 — 2026-08-12
+
+### Bugfix · Verification false-negative on big-publisher bot-block (403) + same-source-skip regression
+- **Root cause (confirmed on another machine via live re-check):** the 37 "unresolved" papers were NOT suspect — they were the most credible, highest-cited works (FLAURA-OS, ADAURA, AURA3-CNS, BLOOM, NCCN guidelines…). Their DOIs are real: `doi.org` returns a correct 302 to the publisher, but NEJM / ASCO-JCO / JNCCN / JAMA / Nature-vs-others / Wiley / MDPI **return 403 to programmatic requests** (bot-blocking). `_resolve_doi` only accepted 2xx, so a 403 was wrongly marked `unresolved` — a **false negative**, not a broken DOI. (Publishers that allow bots — Nature / BMC / Elsevier — return 200 and were the "verified" set; so "verified vs unresolved" tracked publisher bot-policy, not paper quality.)
+- **Fix 1 — `bot_blocked` status:** `_resolve_doi` now returns a 3-state string `ok | bot_blocked | unresolved`. A post-redirect 403 → `bot_blocked`. `verify_one` marks such works `citation_verified=True, citation_verify_status="bot_blocked"` (the identifier IS real) with a note "publisher bot-block (DOI likely valid; 403 from publisher, not a broken link)". This is reported **distinctly** from `unresolved`/`suspicious` everywhere (report.md / xlsx / html / evidence_log.json) so the 37 are never misread as suspect.
+- **Fix 2 — same-source-skip regression:** v0.6.1's source-aware skip silenced the Europe PMC PMID (and OpenAlex id) check for same-source works. When such a work's DOI hit a 403, it had **no fallback** and fell to `unresolved` — even though its real PMID (Europe PMC EXT_ID API, bot-friendly) would have confirmed it. Now, when the DOI does NOT positively verify, PMID (Europe PMC `ext_id`) and OpenAlex id (`api.openalex.org`) are always attempted as the reliable bot-friendly fallback. `skip_sources` is retained for API compat but no longer suppresses that fallback.
+- Summary dicts (`summarize_results`, `verify_works`, `none`-mode vsum) now carry `bot_blocked`. New bilingual labels `ev.bot_blocked` / `ev.bot_blocked.note`.
+- Verified: 14-assertion offline self-test (200/206→ok, 403→bot_blocked, 404→unresolved, full-URL DOI normalized w/o double prefix, DOI-403+PMID-ok→verified, DOI-403+OpenAlex-ok→verified, summarize includes bot_blocked) + EN/ZH report render smoke (bot-blocked=37 shown, note present). `py_compile` clean.
+
+## v0.6.5 — 2026-08-12
+
+### Bugfix · Double-prefix DOI in formatted exports (`format_citations.py`)
+- `references_apa.md` / `references.bib` / `references.ris` could emit `https://doi.org/https://doi.org/10.x/...` when the source DOI was OpenAlex's full resolver URL (`https://doi.org/10.x/...`). `_resolve_doi` was already fixed in v0.6.4, but the **citation-formatting path** still concatenated `"https://doi.org/" + doi` blindly at 6 sites (APA/Nature URL, `url` fallback, BibTeX `doi=` field, RIS `DO ` field, plus vancouver/ieee/gb7714 `doi:` tokens).
+- Added `_bare_doi()` to `format_citations.py` — extracts the canonical `10.x/...` suffix via `_DOI_RE` regardless of input shape (full URL or bare). All 6 sites now build at most one resolver prefix. BibTeX `doi` and RIS `DO` now write the **bare** DOI (spec-correct; previously wrote the full URL).
+- `export_xlsx.py._normalize_link` was already safe (checks `startswith(("http://","https://",...))` first) — no change there.
+- Verified: unit self-test (full-URL + bare inputs → single prefix everywhere, bare in bib/ris) + regenerated real fixture `tests/smoke_out/merged.json` → **zero** `https://doi.org/https://doi.org/` across all three outputs; `doi = {10.1016/...}` and `DO  - 10.1016/...` now correct. `py_compile` clean.
+
+## v0.6.4 — 2026-08-12
+
+### Bugfix · DOI resolution mis-classified big-publisher DOIs as `unresolved`
+- `_resolve_doi` accepted **only HTTP 200** (`code == 200`). Major publishers (NEJM / JCO / JAMA / AACR / Wiley / MDPI / ...) answer the `Range: bytes=0-0` probe with **206 Partial Content** instead of 200, so their live DOIs were wrongly marked `unresolved`. Now any 2xx is treated as resolved (`200 <= code < 300`). The dead `HTTPError`-branch `e.code == 200` (urllib never raises HTTPError for 2xx) was removed.
+- **Mixed DOI formats normalized**: OpenAlex stores the full URL (`https://doi.org/10.x/...`), Europe PMC stores the bare DOI (`10.x/...`). `_resolve_doi` now extracts the canonical `10.x/...` suffix via `_DOI_RE` and always rebuilds the URL, so a double-prefix (`https://doi.org/https://doi.org/...`) can never occur. `work_key` was made format-agnostic too, so the same paper arriving from both sources collapses to one key (no silent duplicate / split verification).
+- Offline-deterministic self-test (mocked `urllib.request.urlopen`): 206/200 resolve for NEJM/JCO/JAMA/AACR/Wiley/MDPI (full-URL + bare forms), 404 stays `unresolved`, URL normalization asserted, `work_key` equality asserted, `verify_one` end-to-end for a NEJM 206 → `verified`. `py_compile` clean.
+
+## v0.6.1 — 2026-08-12
+
+### P0 · Citation verification — scope control + source-aware skip
+- New `--verify {all|top|none}` (default `all`) controls verification scope; legacy `--no-verify-citations` is now an alias for `--verify none`.
+  - `all`: verify every merged work (concurrent with fetch, "verify one as it lands") — unchanged default behavior.
+  - `top`: verify only the top-N by rank (`--verify-top-n`, default 15); remaining works are tagged `unverified_sampled` (no network call). Best speed/coverage trade-off for large result sets.
+  - `none`: skip verification entirely (preview-style annotation).
+- **Source-aware skip**: a work returned by OpenAlex / Europe PMC already carries a real identifier at that source, so the redundant same-source re-resolution round-trip is skipped and trusted **by source provenance** (marked `verified`, no network call). DOI is always cross-checked via `doi.org` (canonical + anti-hallucination net). `verify_citations.verify_one` gains a `skip_sources` parameter; the streaming worker and the `top` post-merge verifier both pass each work's `sources`.
+- Reporting surfaces (report.md / xlsx Evidence Log) now show the verify `mode` (all/top/none) and the `sampled` count, plus bilingual mode notes.
+
+### Tests
+- Offline-deterministic self-tests: 7 `verify_one` skip/provenance cases + full `run()` integration across all three modes (mocked fetchers + verification). `py_compile` clean on all changed modules.
+
+## v0.6.2 — 2026-08-12
+
+### UX · Pre-run time estimate
+- `run()` now prints a localized time-estimate banner **before the fetch begins**, so the user knows results may take a few minutes to return. Estimate scales with verification scope: `all` ≈ 1–4 min, `top` ≈ 1–3 min, `none` ≈ 1 min; rate-limit backoff on the keyless pool extends it further. Output path is shown so the user knows where to look while waiting.
+- New i18n keys `run.starting` / `run.est.{all,top,none}` / `run.vmode.{all,top,none}` (EN/ZH).
+- `SKILL.md` dialogue guidance updated: the agent must mirror this wait-time warning in chat before triggering the real fetch.
+
+## v0.6.3 — 2026-08-12
+
+### Docs · Anti-hallucination value section
+- README.md / README_zh-CN.md: added a prominent "Why You Can Trust the Output — Anti-Hallucination by Design / 为什么可以信任输出 —— 反幻觉设计" section (right after Sources, before §1). Covers the three guardrails (live citation-id resolution P0 default ON + `suspicious` on malformed DOI; full provenance audit trail `evidence_log.json`; reports never pad gaps with prose) plus the two operational safeguards (Safe Preview local compute; source-aware skip by provenance), tied to ct-base §17.1.
+- Fixed a stale FAQ claim: sources actually run **in parallel** (not sequential) since the concurrency change; latency now stated as the slowest source, plus the 1–4 min verification note.
+
 ## v0.6.0 — 2026-08-12
 
 ### P0 · Citation verification (anti-hallucination, ct-base §17.1)

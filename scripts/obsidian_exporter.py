@@ -3,7 +3,7 @@
 """
 obsidian_exporter.py — Obsidian / 文献管理软件集成（升级项 F）.
 
-将 merged.json 的每篇文献导出为 Obsidian 兼容的 Markdown 笔记：
+将 .merged.json 的每篇文献导出为 Obsidian 兼容的 Markdown 笔记：
   - 每篇文献一个独立 .md 文件，文件名即笔记名（去除文件系统非法字符）
   - 笔记内使用 Obsidian 内部链接语法 [[笔记名|作者 年份]] 互相引用
   - 自动生成一份 MOC（Map of Content）索引笔记，汇总全部文献
@@ -13,7 +13,7 @@ obsidian_exporter.py — Obsidian / 文献管理软件集成（升级项 F）.
 纯本地、零联网、仅依赖标准库。可被 ct_literature.py 流水线直接调用，
 也可作为独立 CLI 运行：
 
-  python obsidian_exporter.py --in merged.json --out-dir ./out [--no-related]
+  python obsidian_exporter.py --in .merged.json --out-dir ./out [--no-related]
 
 输出目录：<out-dir>/obsidian/
   ├── <论文标题>.md        每篇文献一篇
@@ -267,8 +267,8 @@ def export_obsidian(merged, out_dir=".", vault_rel="obsidian", build_related=Tru
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Export merged.json to Obsidian notes.")
-    ap.add_argument("--in", dest="inp", required=True, help="merged.json path")
+    ap = argparse.ArgumentParser(description="Export .merged.json to Obsidian notes.")
+    ap.add_argument("--in", default=".merged.json", dest="inp", help=".merged.json path")
     ap.add_argument("--out-dir", default=".", help="output base directory")
     ap.add_argument("--vault-rel", default="obsidian",
                     help="sub-folder for notes (default: obsidian)")

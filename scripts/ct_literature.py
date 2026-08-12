@@ -4,7 +4,7 @@
 ct_literature.py — orchestration entry point.
 
 One-shot pipeline: fetch OpenAlex (required) + optional Europe PMC / Semantic Scholar
--> normalize (merge + dedupe) -> Markdown report. Reads only public literature;
+-> normalize (merge + dedupe) -> HTML / XLSX report. Reads only public literature;
 zero confidential data or information input.
 
 Usage:
@@ -14,16 +14,22 @@ Usage:
 import argparse
 import json
 import os
+import queue
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _SCRIPTS_DIR)
+# adapters/ 位于技能根目录（scripts/ 的上一级）——保证 CLI 直接运行时能找到
+sys.path.insert(0, os.path.dirname(_SCRIPTS_DIR))
 from adapters import fetch_openalex
 from adapters import fetch_europepmc
 from adapters import fetch_semantic_scholar
 from adapters import fetch_preprints
 from adapters import fetch_arxiv
 import normalize
-import report as report_mod
 import export_xlsx
 import export_html
 import score_relevance
@@ -35,6 +41,59 @@ from adapters import verify_citations  # P0: citation identifier verification (a
 import evidence_log      # P0: provenance audit trail (ct-base §17.1)
 from adapters import fetch_prospero    # P1: PROSPERO systematic-review registry (key-gated, opt-in)
 from adapters import http_utils  # shared GET+retry; load_openalex_key() auto-loads key from env/.env
+import i18n  # bilingual (EN/ZH) localization
+
+
+# ── friendly degradation notice (rate-limit / fetch failure) ─────────────────────
+def _friendly_source_note(source, exc):
+    """Build a bilingual, actionable degradation note when a source fails to fetch.
+
+    Returns {"source", "status", "message_zh", "message_en", "banner"} so renderers can
+    show the user's-locale string while the evidence log keeps BOTH languages. The console
+    `banner` uses the current OS locale. Never aborts the pipeline — a failed source just
+    degrades coverage, and the user is told exactly what happened and what to do.
+    """
+    rl = isinstance(exc, http_utils.RateLimitError)
+    if rl and source == "OpenAlex" and exc.keyless:
+        key, kw = "openalex.rate_limited", {"url": http_utils.OPENALEX_SIGNUP_URL}
+    elif rl:
+        key, kw = "source.rate_limited", {"source": source}
+    else:
+        key, kw = "source.error", {"source": source, "err": str(exc)}
+    cur = i18n.t(key, **kw)                       # current OS locale
+    i18n.set_lang("zh"); msg_zh = i18n.t(key, **kw)
+    i18n.set_lang("en"); msg_en = i18n.t(key, **kw)
+    i18n.set_lang(None)                          # reset to auto-detect
+    return {"source": source, "status": "rate_limited" if rl else "error",
+            "message_zh": msg_zh, "message_en": msg_en, "banner": cur}
+
+
+def _verify_top_n(works, n, timeout=15, check_consistency=True):
+    """Verify only the top-N (already ranked) works concurrently.
+
+    Used by `--verify top`: the most relevant / most-cited surviving works get full
+    identifier verification; the rest are marked `unverified_sampled` (no network call).
+    Each work's own `sources` list drives source-aware skip (a paper already returned by
+    OpenAlex / Europe PMC skips the redundant same-source re-resolution).
+
+    Returns (results_map, skipped_count).
+    """
+    target = works[:n]
+    results = {}
+    if not target:
+        return results, len(works)
+    _nw = min(8, len(target))
+    with ThreadPoolExecutor(max_workers=_nw) as _ex:
+        _futs = {}
+        for _w in target:
+            _ss = _w.get("sources") or ([_w.get("source")] if _w.get("source") else None)
+            _futs[_ex.submit(verify_citations.verify_one, _w, timeout, _ss,
+                              check_consistency)] = \
+                verify_citations.work_key(_w)
+        for _f in as_completed(_futs):
+            results[_futs[_f]] = _f.result()
+    return results, len(works) - len(target)
+
 
 # P0 new capabilities default flags
 DEFAULT_CITATION_STYLE = "apa"
@@ -47,11 +106,11 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         max_results=30, with_europepmc=True, with_semantic_scholar=False,
         with_biorxiv=False, with_medrxiv=False, with_arxiv=False,
         with_prospero=False, prospero_token=None, prospero_header="PROSPERO-ACCESS-TOKEN",
-        verify_citations_flag=True,
+        verify_mode="all", verify_top_n=15, verify_consistency=True,
         out_dir="./out", make_xlsx=True, make_html=True, openalex_key=None,
         citation_style=DEFAULT_CITATION_STYLE, export_bib=DEFAULT_EXPORT_BIB,
         prisma=DEFAULT_PRISMA, rank=DEFAULT_RANK, keywords=None,
-        obsidian=False, zotero=False):
+        obsidian=False, zotero=False, lang="auto"):
     os.makedirs(out_dir, exist_ok=True)
     http_utils.notify_openalex_key_if_missing(openalex_key)
     oa_json = os.path.join(out_dir, "openalex.json")
@@ -61,38 +120,130 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     medrxiv_json = os.path.join(out_dir, "medrxiv.json")
     arxiv_json = os.path.join(out_dir, "arxiv.json")
     prospero_json = os.path.join(out_dir, "prospero.json")
-    merged_json = os.path.join(out_dir, "merged.json")
-    md_out = os.path.join(out_dir, "lit_report.md")
+    merged_json = os.path.join(out_dir, ".merged.json")
+
+    # ---- fetch all enabled sources in PARALLEL (per-source concurrency) ----
+    # Each source is an independent network call that writes its own JSON file; running
+    # them concurrently turns the summed per-source latency into the latency of the
+    # SLOWEST source. (Intra-source multi-page pagination stays serial inside each
+    # fetcher — default max_results=30 fits one page, and parallel paging would raise
+    # rate-limit risk on the keyless pool.)
+    jobs = []
+    jobs.append(("OpenAlex", lambda: fetch_openalex.fetch(
+        topic, review_type, year_from, year_to, safety, max_results,
+        run=True, out=oa_json, api_key=openalex_key)))
+    if with_europepmc:
+        jobs.append(("EuropePMC", lambda: fetch_europepmc.fetch(
+            topic, review_type, year_from, year_to, safety, max_results,
+            run=True, out=epmc_json)))
+    if with_semantic_scholar:
+        jobs.append(("SemanticScholar", lambda: fetch_semantic_scholar.fetch(
+            topic, review_type, year_from, year_to, safety, max_results,
+            run=True, out=s2_json)))
+    if with_biorxiv:
+        jobs.append(("bioRxiv", lambda: fetch_preprints.fetch(
+            topic, review_type, year_from, year_to, safety, max_results,
+            run=True, out=biorxiv_json, server="biorxiv")))
+    if with_medrxiv:
+        jobs.append(("medRxiv", lambda: fetch_preprints.fetch(
+            topic, review_type, year_from, year_to, safety, max_results,
+            run=True, out=medrxiv_json, server="medrxiv")))
+    if with_arxiv:
+        jobs.append(("arXiv", lambda: fetch_arxiv.fetch(
+            topic, review_type, year_from, year_to, safety, max_results,
+            run=True, out=arxiv_json)))
+    if with_prospero:
+        jobs.append(("PROSPERO", lambda: fetch_prospero.fetch(
+            topic, review_type, year_from, year_to, safety, max_results,
+            run=True, out=prospero_json, token=prospero_token, header_name=prospero_header)))
 
     payloads = []
-    oa = fetch_openalex.fetch(topic, review_type, year_from, year_to, safety,
-                              max_results, run=True, out=oa_json, api_key=openalex_key)
-    payloads.append(oa)
-    if with_europepmc:
-        ep = fetch_europepmc.fetch(topic, review_type, year_from, year_to, safety,
-                                   max_results, run=True, out=epmc_json)
-        payloads.append(ep)
-    if with_semantic_scholar:
-        s2 = fetch_semantic_scholar.fetch(topic, review_type, year_from, year_to, safety,
-                                          max_results, run=True, out=s2_json)
-        payloads.append(s2)
-    if with_biorxiv:
-        br = fetch_preprints.fetch(topic, review_type, year_from, year_to, safety,
-                                   max_results, run=True, out=biorxiv_json, server="biorxiv")
-        payloads.append(br)
-    if with_medrxiv:
-        mr = fetch_preprints.fetch(topic, review_type, year_from, year_to, safety,
-                                   max_results, run=True, out=medrxiv_json, server="medrxiv")
-        payloads.append(mr)
-    if with_arxiv:
-        ax = fetch_arxiv.fetch(topic, review_type, year_from, year_to, safety,
-                               max_results, run=True, out=arxiv_json)
-        payloads.append(ax)
-    if with_prospero:
-        pr = fetch_prospero.fetch(topic, review_type, year_from, year_to, safety,
-                                  max_results, run=True, out=prospero_json,
-                                  token=prospero_token, header_name=prospero_header)
-        payloads.append(pr)
+    source_notes = []  # degradation notices for sources that failed to fetch (rate-limit / error)
+    # ---- P0: citation verification pipeline (producer = fetch, consumer = worker pool).
+    # Runs CONCURRENTLY with the fetch phase: as soon as a source yields its works they are
+    # queued for verification — no need to wait for all downloads to finish. Each work is
+    # verified the moment it arrives ("verify one as it lands"). ----
+    _verify_q = queue.Queue()
+    _verify_results = {}
+    _verify_workers = []
+    # Source-aware streaming verification only runs in `all` mode. In `top` mode we verify
+    # after ranking (only the top-N); in `none` we skip verification entirely.
+    _should_stream = (verify_mode == "all" and jobs)
+    if _should_stream:
+        print("[verify] mode=all (streaming; source-aware skip on same-source re-resolution)")
+        def _verify_worker():
+            while True:
+                _item = _verify_q.get()
+                if _item is None:
+                    _verify_q.task_done()
+                    break
+                _w, _k, _src = _item
+                try:
+                    # verify_one always tries DOI -> PMID -> OpenAlex id. When the DOI
+                    # is bot-blocked (big-publisher 403) it falls back to the bot-friendly
+                    # PMID / OpenAlex APIs instead of being mislabeled "unresolved".
+                    # (skip_sources is accepted for API compat but no longer suppresses
+                    # that reliable fallback — see verify_citations CHANGELOG v0.6.6.)
+                    _verify_results[_k] = verify_citations.verify_one(
+                        _w, timeout=15, skip_sources=[_src] if _src else None,
+                        check_consistency=verify_consistency)
+                except Exception as _ve:  # one failure must not abort the pool
+                    _verify_results[_k] = {"citation_verified": False,
+                                          "citation_verify_status": "unresolved",
+                                          "citation_verify_note": "verify-error: %s" % _ve}
+                _verify_q.task_done()
+
+        _vw = min(8, max(1, len(jobs)))  # cap concurrency to avoid API throttling
+        for _ in range(_vw):
+            _t = threading.Thread(target=_verify_worker, daemon=True)
+            _t.start()
+            _verify_workers.append(_t)
+
+    # ---- time notice: a real run can take several minutes; tell the user up front ----
+    # Honest estimate by verification scope; verification (`all`) overlaps with the fetch
+    # phase but on large result sets still dominates the wall-clock time. Output path is
+    # shown so the user knows where to look while waiting. Locale follows the OS.
+    _est = i18n.t("run.est.%s" % verify_mode)
+    if verify_mode == "top":
+        _vmode = i18n.t("run.vmode.top", n=verify_top_n)
+    else:
+        _vmode = i18n.t("run.vmode.%s" % verify_mode)
+    print(i18n.t("run.starting", est=_est, vmode=_vmode, out=out_dir))
+
+    if jobs:
+        _t0 = time.time()
+        with ThreadPoolExecutor(max_workers=len(jobs)) as _ex:
+            _futs = {_ex.submit(fn): name for name, fn in jobs}
+            _res = {}
+            for _fut in as_completed(_futs):
+                _name = _futs[_fut]
+                try:
+                    _p = _fut.result()
+                    _res[_name] = _p
+                    # stream this source's works into the verification queue immediately
+                    if _should_stream and _p is not None:
+                        for _w in (_p.get("works") or []):
+                            _verify_q.put((_w, verify_citations.work_key(_w), _w.get("source")))
+                except Exception as _e:  # one source failing must not kill the pipeline
+                    _note = _friendly_source_note(_name, _e)
+                    print(_note["banner"])
+                    source_notes.append(_note)
+                    _res[_name] = None
+        # re-assemble in the original (stable) source order
+        for _name, _ in jobs:
+            _p = _res.get(_name)
+            if _p is not None:
+                payloads.append(_p)
+        print("[OK] parallel fetch: %d source(s) in %.1fs"
+              % (len(jobs), time.time() - _t0))
+    else:
+        print("[WARN] no sources enabled")
+
+    # drain the verification workers (they finish as the queue empties)
+    for _ in _verify_workers:
+        _verify_q.put(None)
+    for _t in _verify_workers:
+        _t.join()
 
     works = normalize.merge(payloads)
 
@@ -115,10 +266,45 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             pass
 
     # ---- P0: citation verification (anti-hallucination, ct-base §17.1) ----
+    # `all`: verification already ran concurrently with fetch above; attach + summarize.
+    # `top`: verify only the top-N (ranked) works concurrently, leave the rest unverified.
+    # `none`: skip verification entirely (preview-style annotation, no network).
     vsum = None
-    if verify_citations_flag:
-        works, vsum = verify_citations.verify_works(works, run=True)
-        print("[OK] citation verification: %s" % json.dumps(vsum, ensure_ascii=False))
+    if verify_mode == "all":
+        verify_citations.attach_verifications(works, _verify_results)
+        vsum = verify_citations.summarize_results(_verify_results)
+        vsum["mode"] = "all"
+        vsum["skipped_preview"] = False
+        print("[OK] citation verification (concurrent, all): %s"
+              % json.dumps(vsum, ensure_ascii=False))
+    elif verify_mode == "top":
+        _tv, _skipped = _verify_top_n(works, verify_top_n,
+                                      check_consistency=verify_consistency)
+        verify_citations.attach_verifications(works, _tv)
+        # mark works beyond the top-N as sampled-out (no network call)
+        for _w in works[verify_top_n:]:
+            _w.setdefault("citation_verified", False)
+            _w.setdefault("citation_verify_status", "unverified_sampled")
+            _w.setdefault("citation_verify_note",
+                          "not verified (sampled out; --verify top N=%d)" % verify_top_n)
+        vsum = verify_citations.summarize_results(_tv)
+        vsum["unverified_sampled"] = _skipped
+        vsum["total"] = len(works)
+        vsum["mode"] = "top"
+        vsum["top_n"] = verify_top_n
+        vsum["skipped_preview"] = False
+        print("[OK] citation verification (top-%d, sampled %d): %s"
+              % (verify_top_n, _skipped, json.dumps(vsum, ensure_ascii=False)))
+    else:  # verify_mode == "none"
+        for _w in works:
+            _w.setdefault("citation_verified", False)
+            _w.setdefault("citation_verify_status", "no_identifier")
+            _w.setdefault("citation_verify_note", "verify disabled (--verify none)")
+        vsum = {"total": len(works), "verified": 0, "bot_blocked": 0, "unresolved": 0,
+                "no_identifier": len(works), "suspicious": 0, "mismatch": 0,
+                "unverified_sampled": 0, "skipped_preview": True,
+                "mode": "none"}
+        print("[OK] citation verification skipped (mode=none)")
 
     # ---- build meta (shared by report / xlsx / html / evidence log) ----
     meta = {"topic": topic, "review_type": review_type,
@@ -127,13 +313,29 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             "rank": rank, "keywords": keywords,
             "prisma": prisma_block,
             "verification": vsum,
-            "with_prospero": with_prospero}
+            "with_prospero": with_prospero,
+            "source_notes": source_notes}
+
+    # ---- run-time config audit block (records key status so the search never
+    #      silently takes the wrong / throttled path) ----
+    oa_status = http_utils.get_openalex_key_status()
+    config = {
+        "openalex_key": oa_status,
+        "openalex_key_url": http_utils.OPENALEX_SIGNUP_URL,
+        "semantic_scholar_key": "configured" if http_utils.load_s2_key() else "missing",
+        "prospero_token": "configured" if (with_prospero and prospero_token) else (
+            "missing" if with_prospero else "not_used"),
+    }
+    meta["config"] = config
 
     # ---- P0: provenance audit trail (evidence log) ----
-    evidence = evidence_log.build_log(payloads, topic, meta, vsum)
+    evidence = evidence_log.build_log(payloads, topic, meta, vsum, config=config,
+                                        degraded=source_notes)
     ev_res = evidence_log.write_log(evidence, out_dir)
     meta["evidence_log"] = evidence
     print("[OK] evidence_log -> %s / %s" % (ev_res["json"], ev_res["md"]))
+    if oa_status == "missing":
+        print("[WARN] OpenAlex ran in keyless mode — re-run with a configured key for full coverage.")
 
     out_data = {"count": len(works), "works": works}
     if prisma_block:
@@ -142,12 +344,8 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     out_data["verification"] = vsum
     with open(merged_json, "w", encoding="utf-8") as f:
         json.dump(out_data, f, ensure_ascii=False, indent=2)
-    print("[OK] merged %d unique works -> %s" % (len(works), merged_json))
-
-    md = report_mod.render(works, meta)
-    with open(md_out, "w", encoding="utf-8") as f:
-        f.write(md)
-    print("[OK] report ->", md_out)
+    print("[OK] intermediate state -> %s (hidden; reused by standalone tools)" % merged_json)
+    primary = None
 
     # ---- P0-A: citation formatting + BibTeX/RIS export ----
     if export_bib:
@@ -165,17 +363,19 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         try:
             export_xlsx.export_workbook(
                 {"count": len(works), "works": works, "meta": meta},
-                xlsx_out, lang="auto")
+                xlsx_out, lang=lang)
             print("[OK] xlsx  ->", xlsx_out)
+            primary = primary or xlsx_out
         except Exception as _xe:
             print("[WARN] xlsx export failed: %s" % _xe)
     if make_html:
         html_out = os.path.join(out_dir, "lit_report.html")
         try:
-            html_text = export_html.render(out_data, "auto")
+            html_text = export_html.render(out_data, lang)
             with open(html_out, "w", encoding="utf-8") as f:
                 f.write(html_text)
             print("[OK] html  ->", html_out)
+            primary = html_out
         except Exception as _he:
             print("[WARN] html export failed: %s" % _he)
 
@@ -183,7 +383,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     if obsidian:
         try:
             ob = obsidian_exporter.export_obsidian(
-                {"count": len(works), "works": works}, out_dir=out_dir, lang="zh")
+                {"count": len(works), "works": works}, out_dir=out_dir, lang=lang)
             print("[OK] obsidian notes=%d -> %s" % (ob["count"], ob["folder"]))
             print("     moc -> %s" % ob["moc"])
         except Exception as _oe:
@@ -195,7 +395,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             print("[OK] zotero csv/ris -> %s / %s" % (zo["csv"], zo["ris"]))
         except Exception as _ze:
             print("[WARN] zotero export failed: %s" % _ze)
-    return md_out
+    return primary
 
 
 def main():
@@ -259,16 +459,29 @@ def main():
                     help="order works by cited_by_count (default) or relevance_score")
     ap.add_argument("--keywords", default=None,
                     help="comma-separated extra keywords for relevance scoring")
-    # ---- P0: citation verification toggle ----
+    # ---- P0: citation verification scope ----
+    ap.add_argument("--verify", default="all", choices=["all", "top", "none"],
+                    help="citation verification scope (anti-hallucination, ct-base §17.1): "
+                         "all = verify every work (default); top = verify only the top-N by "
+                         "rank (fastest, good for large result sets); none = skip verification. "
+                         "All modes apply source-aware skip (no redundant same-source re-resolution).")
+    ap.add_argument("--verify-top-n", type=int, default=15,
+                    help="N for --verify top (default 15): number of top-ranked works to verify")
     ap.add_argument("--no-verify-citations", action="store_true",
-                    help="disable P0 citation-identifier verification (anti-hallucination); "
-                         "default ON (verifies doi/pmid/OpenAlex id against the live source)")
+                    help="legacy alias for `--verify none` (disable citation verification)")
+    ap.add_argument("--no-consistency", action="store_true",
+                    help="skip the title/author consistency cross-check (identifier still "
+                         "resolved, but not compared against the resolved paper's metadata)")
     # ---- F: literature-manager integration ----
     ap.add_argument("--obsidian", action="store_true",
                     help="export Obsidian notes (per-paper .md + MOC index, "
                          "internal [[links]]); writes <out-dir>/obsidian/")
     ap.add_argument("--zotero", action="store_true",
                     help="export Zotero-importable zotero.csv + zotero.ris into <out-dir>/")
+    ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"],
+                    help="UI language for xlsx / html / markdown / obsidian outputs. "
+                         "auto = follow OS locale (zh in a Chinese locale, else en); "
+                         "force zh or en to override.")
     args = ap.parse_args()
 
     if not args.run:
@@ -294,12 +507,15 @@ def main():
         args.with_biorxiv, args.with_medrxiv, args.with_arxiv,
         with_prospero=args.with_prospero, prospero_token=args.prospero_token,
         prospero_header=args.prospero_header,
-        verify_citations_flag=not args.no_verify_citations,
+        verify_mode=("none" if args.no_verify_citations else args.verify),
+        verify_top_n=args.verify_top_n,
+        verify_consistency=not args.no_consistency,
         out_dir=args.out_dir,
         make_xlsx=not args.no_xlsx, make_html=not args.no_html,
         openalex_key=args.openalex_key, citation_style=args.citation_style,
         export_bib=args.export_bib, prisma=args.prisma, rank=args.rank,
-        keywords=args.keywords, obsidian=args.obsidian, zotero=args.zotero)
+        keywords=args.keywords, obsidian=args.obsidian, zotero=args.zotero,
+        lang=args.lang)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ fetch_openalex.py; imported here so the rule stays in sync — falls back to a
 local copy if that module is unavailable) and the review_type signal. No LLM is
 invoked; the screen is a machine first-pass only.
 
-It writes a `prisma` block into merged.json and annotates each work with
+It writes a `prisma` block into .merged.json and annotates each work with
 `prisma_stage` / `prisma_included` / `prisma_reason`.
 
 PRISMA-2020 four-stage funnel produced:
@@ -156,8 +156,8 @@ def screen(works, topic="", review_type="all", safety=False):
 
 def main():
     ap = argparse.ArgumentParser(description="PRISMA rule-based title/abstract screen.")
-    ap.add_argument("--in", required=True, dest="inp", help="merged.json path")
-    ap.add_argument("--out", help="output merged.json (default: overwrite --in)")
+    ap.add_argument("--in", default=".merged.json", dest="inp", help=".merged.json path")
+    ap.add_argument("--out", help="output .merged.json (default: overwrite --in)")
     ap.add_argument("--topic", default="", help="topic query (used for relevance rule)")
     ap.add_argument("--review-type", default="all")
     ap.add_argument("--safety", action="store_true", help="safety / CSM bias mode")

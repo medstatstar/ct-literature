@@ -35,7 +35,11 @@ def _norm_doi(d):
         return None
     d = d.strip().lower()
     m = re.search(r"10\.\d{4,9}/[^\s]+", d)
-    return m.group(0) if m else d
+    if not m:
+        return d
+    # strip a trailing terminal punctuation a source may have appended to the DOI
+    # (e.g. "10.1056/NEJMoa2403614.") so the bare DOI resolves / links cleanly.
+    return m.group(0).rstrip(".,;:)]")
 
 
 def merge(payloads):

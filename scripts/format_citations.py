@@ -3,13 +3,13 @@
 """
 format_citations.py — formatted citations + BibTeX / RIS export.
 
-Reads `merged.json` and renders each work as a formatted citation under one of
+Reads `.merged.json` and renders each work as a formatted citation under one of
 five styles (apa / nature / vancouver / ieee / gb7714), then writes:
   - references.bib   (BibTeX, all works)
   - references.ris   (RIS, all works)
   - references_<style>.md  (human-readable citation list in the chosen style)
 
-Pure local; reuses existing merged.json schema fields (title / authors / year /
+Pure local; reuses existing .merged.json schema fields (title / authors / year /
 publication / volume / issue / page / doi / url). No fetch-layer change needed.
 
 GB/T 7714 is the Chinese national standard: when style == 'gb7714' we branch to
@@ -25,6 +25,25 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 STYLES = ["apa", "nature", "vancouver", "ieee", "gb7714"]
+
+# DOI can arrive in two shapes: OpenAlex stores the full resolver URL
+# (https://doi.org/10.x/...), Europe PMC stores the bare DOI (10.x/...).
+# Normalise to the canonical bare suffix so every consumer (text citation,
+# BibTeX, RIS) builds at most ONE resolver prefix — never "https://doi.org/https://...".
+_DOI_RE = re.compile(r"10\.\d{4,9}/[^\s]+")
+
+
+def _bare_doi(doi):
+    """Return the canonical bare DOI (10.x/...) regardless of input shape.
+
+    Accepts a full URL (https://doi.org/10.x/...) or a bare DOI (10.x/...) and
+    always returns the bare suffix; non-DOI / malformed input is returned as-is.
+    """
+    if not doi:
+        return ""
+    m = _DOI_RE.search(str(doi))
+    return m.group(0) if m else str(doi).strip()
+
 
 # ---- field helpers (tolerant of missing / mixed types) ----
 
@@ -120,7 +139,8 @@ def cite(work, style):
     iss = work.get("issue") or ""
     pages = _pages(work)
     doi = work.get("doi") or ""
-    url = work.get("url") or (("https://doi.org/" + doi) if doi else "")
+    bare_doi = _bare_doi(doi)
+    url = work.get("url") or (("https://doi.org/" + bare_doi) if bare_doi else "")
 
     if style == "apa":
         a = _apa_authors(authors)
@@ -135,7 +155,7 @@ def cite(work, style):
                 s += ", %s" % pages
             s += "."
         if doi:
-            s += " https://doi.org/%s" % doi
+            s += " https://doi.org/%s" % bare_doi
         return s.strip()
 
     if style == "nature":
@@ -152,7 +172,7 @@ def cite(work, style):
         elif year:
             s += "(%s)." % year
         if doi:
-            s += " https://doi.org/%s" % doi
+            s += " https://doi.org/%s" % bare_doi
         return s.strip()
 
     if style == "vancouver":
@@ -169,7 +189,7 @@ def cite(work, style):
                 s += ":%s" % pages
             s += "."
         if doi:
-            s += " doi:%s" % doi
+            s += " doi:%s" % bare_doi
         return s.strip()
 
     if style == "ieee":
@@ -188,7 +208,7 @@ def cite(work, style):
         elif year:
             s += "%s." % year
         if doi:
-            s += " doi: %s." % doi
+            s += " doi: %s." % bare_doi
         return s.strip()
 
     if style == "gb7714":
@@ -206,7 +226,7 @@ def cite(work, style):
                 s += ":%s" % pages
             s += "."
         if doi:
-            s += " DOI:%s." % doi
+            s += " DOI:%s." % bare_doi
         return s.strip()
 
     # fallback to apa
@@ -257,7 +277,7 @@ def to_bibtex(works):
         if _pages(w):
             lines.append("  pages = {%s}," % _pages(w))
         if w.get("doi"):
-            lines.append("  doi = {%s}," % w["doi"])
+            lines.append("  doi = {%s}," % _bare_doi(w["doi"]))
         if w.get("url"):
             lines.append("  url = {%s}," % w["url"])
         lines.append("}")
@@ -290,7 +310,7 @@ def to_ris(works):
             else:
                 lines.append("SP  - %s" % pg)
         if w.get("doi"):
-            lines.append("DO  - %s" % w["doi"])
+            lines.append("DO  - %s" % _bare_doi(w["doi"]))
         if w.get("url"):
             lines.append("UR  - %s" % w["url"])
         lines.append("ER  - ")
@@ -333,7 +353,7 @@ def export_citations(merged, style="apa", out_dir=".", lang="auto"):
 
 def main():
     ap = argparse.ArgumentParser(description="Format citations + export BibTeX/RIS.")
-    ap.add_argument("--in", required=True, dest="inp", help="merged.json path")
+    ap.add_argument("--in", default=".merged.json", dest="inp", help=".merged.json path")
     ap.add_argument("--out-dir", default=".", help="output directory")
     ap.add_argument("--citation-style", default="apa", choices=STYLES,
                     help="citation style (default: apa)")

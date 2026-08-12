@@ -3,7 +3,7 @@ slug: ct-literature
 name: ct-literature
 displayName: 临床试验文献检索专家 / Clinical Trial Literature Search
 cn_name: 临床试验文献检索专家
-version: 0.6.0
+version: 0.6.11
 invocable: true
 summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + Semantic Scholar 引用增强 + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集；B 档公开检索，零保密输入。
 license: MIT
@@ -99,10 +99,10 @@ The four B-tier public-intel skills are complementary, each answering a differen
 | Resilient fetch (retry + backoff) | All | Exponential backoff on 429/5xx/timeout; honors `Retry-After`; OpenAlex Bearer key via `--openalex-key` / `OPENALEX_API_KEY` / skill `.env` auto-load |
 | Safe link rendering | All | `_normalize_link()` sanitises every hyperlink before export |
 | Formatted citations + BibTeX/RIS | All | `--citation-style` (apa/nature/vancouver/ieee/gb7714, default apa) + `--export-bib` (default on) → `references.bib` / `references.ris` / `references_<style>.md` |
-| PRISMA screening funnel | All | `--prisma` (default on) deterministic title/abstract rule screen (reuses `SAFETY_LEXICON` / `review_type`, no LLM) → `merged.json` `prisma` block + inline SVG funnel in `merged.html` |
+| PRISMA screening funnel | All | `--prisma` (default on) deterministic title/abstract rule screen (reuses `SAFETY_LEXICON` / `review_type`, no LLM) → `.merged.json` `prisma` block + inline SVG funnel in `lit_report.html` |
 | Relevance scoring | All | `--rank relevance` + optional `--keywords` → each work gets `relevance_score` (0–1, title 0.6 + abstract 0.4); report adds a Relevance column |
 | Obsidian / 文献管理集成 | All | `--obsidian` → 每篇文献一篇 Obsidian 兼容 Markdown 笔记（含 `[[笔记名\|作者 年份]]` 内部链接 + 基于共享概念的「相关文献」交叉链接）+ `Literature MOC.md` 索引；`--zotero` → 导出 `zotero.csv` / `zotero.ris`（Zotero 可导入） |
-| **P0 · Citation verification** | All | `--no-verify-citations` to disable (default ON) → each merged work is checked against its live identifier (doi → `doi.org` 200, pmid → Europe PMC EXT_ID, OpenAlex id → `api.openalex.org`) and tagged `citation_verified` / `citation_verify_status` (verified / unresolved / no_identifier / suspicious) / `citation_verify_note`; a malformed DOI is flagged `suspicious` (possible hallucinated id). Anti-hallucination, ct-base §17.1. |
+| **P0 · Citation verification** | All | Identifier reality check (anti-hallucination, ct-base §17.1). Scope via `--verify {all\|top\|none}` (default `all`): `all` verifies every merged work (concurrent with fetch, "verify one as it lands"); `top` verifies only the top-N by rank (`--verify-top-n`, default 15) and marks the rest `unverified_sampled`; `none` skips verification. **Source-aware skip**: a work returned by OpenAlex / Europe PMC already carries a real id at that source, so the redundant same-source re-resolution is skipped and trusted by provenance (no network call) — DOI is always cross-checked via `doi.org`. **Title/author consistency depth (v0.6.11)**: once an identifier resolves to a live resource, its canonical metadata is fetched (Crossref for DOI — bot-friendly even when the publisher bot-blocks `doi.org`; Europe PMC for PMID; OpenAlex for OpenAlex id) and compared to the work's title + first-author surname. A resolved-but-different paper is flagged `mismatch` (not `verified`); a `bot_blocked` DOI whose Crossref metadata matches is upgraded to `verified`. Metadata-fetch failure degrades to "verified, consistency unchecked" (never invents a mismatch). `--no-consistency` skips this layer. Each work is tagged `citation_verified` / `citation_verify_status` (verified / bot_blocked / mismatch / unresolved / no_identifier / suspicious / unverified_sampled) / `citation_verify_note` / `citation_consistency` / `citation_title_ratio`; a malformed DOI is flagged `suspicious`. Legacy alias `--no-verify-citations` = `--verify none`. |
 | **P0 · Evidence provenance log** | All | Every run emits `evidence_log.json` + `evidence_log.md` (and an Evidence Log sheet in the workbook + an Evidence & Verification block in the HTML): query → source → hit count → retrieved_at → verification rate, fully traceable. |
 | **P1 · PROSPERO registry** | Review register | `--with-prospero` (opt-in, key-gated, **reserved source**) → systematic-review registration / protocol discovery. Requires an API token (`--prospero-token` / env `PROSPERO_API_TOKEN`); the public REST auth header is undocumented so it degrades to a no-op skip until a working token + header is supplied. Never claimed functional. Retained as a dormant interface — no token application planned. |
 
@@ -123,14 +123,12 @@ The four B-tier public-intel skills are complementary, each answering a differen
 ## Output
 
 - `openalex.json` / `europepmc.json` / `semantic_scholar.json` / `biorxiv.json` / `medrxiv.json` / `arxiv.json` — per-source payloads (only those enabled)
-- `merged.json` — unified, de-duplicated work list (DOI/title dedupe, `sources` provenance)
-- `lit_report.md` — summary header + top-works table (with OA download links) + key-detail cards + study-type distribution + yearly trend + safety/CSM subset
 - `lit_report.xlsx` — Excel delivery (reuses ct-base `excel_style`); auto-generated on `--run` (`--no-xlsx` to skip). Green theme, 4 sheets: Overview → Literature master → Safety-related, with KPI cards, yearly/source/type charts, `is_safety` amber highlighting, and a field dictionary.
-- `merged.html` — self-contained HTML report (inline CSS, offline, print/PDF styles); auto-generated on `--run` (`--no-html` to skip). Same palette as the xlsx. Includes an inline-SVG **PRISMA funnel** when `--prisma` is on.
+- `lit_report.html` — self-contained HTML report (inline CSS, offline, print/PDF styles); auto-generated on `--run` (`--no-html` to skip). Same palette as the xlsx. Includes an inline-SVG **PRISMA funnel** when `--prisma` is on.
 - `references.bib` / `references.ris` / `references_<style>.md` — formatted citations (style from `--citation-style`) + BibTeX/RIS exports; auto-generated on `--run` unless `--no-export-bib`. See `references/citation_styles.md`.
 - `obsidian/` (with `--obsidian`) — `<论文标题>.md` 每篇文献一篇（YAML frontmatter + 摘要 + 来源链接 + `[[Literature MOC]]` 回链 + 相关文献 `[[...]]` 交叉链接）+ `Literature MOC.md` 索引笔记。将整个 `obsidian/` 文件夹作为 Obsidian vault 打开即可图谱化浏览文献网络。
 - `zotero.csv` / `zotero.ris` (with `--zotero`) — Zotero 可导入格式：CSV 列名对齐 Zotero 导入约定（多作者 / 多标签用 `||` 分隔），RIS 为跨平台书目交换权威格式（建议优先用 RIS 导入）。
-- `merged.json` gains two additive blocks: `prisma` (screening funnel counts) and per-work `relevance_score` / `prisma_included` — both incremental-compatible with existing consumers.
+- `.merged.json` gains two additive blocks: `prisma` (screening funnel counts) and per-work `relevance_score` / `prisma_included` — both incremental-compatible with existing consumers.
 
 See `references/sop.md` for the full command catalogue.
 
@@ -197,3 +195,5 @@ A cross-database planning layer (Embase / Cochrane / Web of Science + preprint T
 ## Natural language dialogue
 
 Follow `references/search_menu.md`: parse topic / review_type / year / safety; ≥2 params → preview; otherwise ≤2 rounds then default; preview → confirm → `--run` → present summary. Atomic-task units: `references/units.md`.
+
+**Before the actual fetch begins, warn the user it may take several minutes** (the pipeline prints a localized time estimate at run start; mirror it in chat). `--verify all` (default) overlaps fetch with per-paper identifier verification and can run 1–4 min on large result sets; `--verify top` ~1–3 min; `--verify none` ~1 min. Rate-limit backoff on the keyless pool extends this further.

@@ -1,4 +1,32 @@
 {
+  "openalex.key_notice": {
+    "en": "[CONFIG] OpenAlex API key NOT configured — running in keyless mode (100 credits/day, easily rate-limited / HTTP 429). Apply for a FREE key at {url} and write it to the skill `.env` as `OPENALEX_API_KEY=<key>`, then re-run for full coverage.",
+    "zh": "[配置] 未配置 OpenAlex API key —— 当前以 keyless 模式运行（限 100 次/天，易触发 HTTP 429 限流）。请到 {url} 免费申请 key，写入技能目录 `.env`（`OPENALEX_API_KEY=<key>`）后重新运行以获得完整检索覆盖。"
+  },
+  "semantic_scholar.key_notice": {
+    "en": "[CONFIG] Semantic Scholar API key NOT configured — keyless pool is strict (~1 req/s) and may block. Apply for a FREE key at https://www.semanticscholar.org/product/api and write it to the skill `.env` as `SEMANTIC_SCHOLAR_API_KEY=<key>`.",
+    "zh": "[配置] 未配置 Semantic Scholar API key —— keyless 池极严格（约 1 次/秒）并可能封禁。请到 https://www.semanticscholar.org/product/api 免费申请后写入技能目录 `.env`（`SEMANTIC_SCHOLAR_API_KEY=<key>`）。"
+  },
+  "http.429.keyless_notice": {
+    "en": "⚠️ Rate limit hit (HTTP 429): no API key -> keyless pool (100 credits/day). Briefly retrying; if it still fails the run will auto-degrade to other sources.",
+    "zh": "⚠️ 命中限流（HTTP 429）：未带 API key，落在无 key 池（每日 100 次配额）。正在快速重试；若仍失败将自动降级到其他数据源。"
+  },
+  "http.429.notice": {
+    "en": "⚠️ Rate limit hit (HTTP 429); server suggests retry after {secs} s. Backing off as instructed...",
+    "zh": "⚠️ 命中限流（HTTP 429），服务端建议 {secs} 秒后重试。正在按建议退避……"
+  },
+  "openalex.rate_limited": {
+    "en": "⚠️ OpenAlex was rate-limited (HTTP 429, keyless mode). This run used only other sources (e.g. Europe PMC). Apply for a FREE API key, write it to the skill `.env` (`OPENALEX_API_KEY=<key>`), then re-run for full coverage: {url}",
+    "zh": "⚠️ OpenAlex 触发限流（HTTP 429，keyless 模式）。本次结果仅来自其他数据源（如 Europe PMC）。建议免费申请 API key 并写入技能目录 `.env`（`OPENALEX_API_KEY=<key>`）后重跑以获得完整覆盖：{url}"
+  },
+  "source.rate_limited": {
+    "en": "⚠️ {source} was rate-limited (HTTP 429). This run used only other available sources.",
+    "zh": "⚠️ {source} 触发限流（HTTP 429）。本次结果仅来自其他可用数据源。"
+  },
+  "source.error": {
+    "en": "❌ {source} fetch failed: {err}. This run used only other available sources.",
+    "zh": "❌ {source} 检索失败：{err}。本次结果仅来自其他可用数据源。"
+  },
   "dry_run.not_executed": {
     "en": "[DRY RUN — code not executed. Remove --dry-run to execute.]",
     "zh": "[DRY RUN — 代码未执行。去掉 --dry-run 以执行。]"
@@ -6,6 +34,34 @@
   "safe_preview.not_executed": {
     "en": "[SAFE PREVIEW] R code was NOT executed. Re-run with --yes to compute the result.",
     "zh": "[安全预览] R 代码未执行。追加 --yes 重新运行以计算结果。]"
+  },
+  "run.starting": {
+    "en": "🔎 Literature search started. Results may take a few minutes to return — typically {est}. ({vmode}; larger result sets or rate-limit backoff take longer.) Output → {out}",
+    "zh": "🔎 文献检索已开始。返回结果可能需等待数分钟——通常 {est}。（{vmode}；结果集越大或遇限流退避时更久。）输出 → {out}"
+  },
+  "run.est.all": {
+    "en": "1–4 min",
+    "zh": "1–4 分钟"
+  },
+  "run.est.top": {
+    "en": "1–3 min",
+    "zh": "1–3 分钟"
+  },
+  "run.est.none": {
+    "en": "~1 min",
+    "zh": "1 分钟左右"
+  },
+  "run.vmode.all": {
+    "en": "full citation verification on",
+    "zh": "已开启全量引文验证"
+  },
+  "run.vmode.top": {
+    "en": "verifying top-{n} citations",
+    "zh": "仅验证被引前 {n} 条引文"
+  },
+  "run.vmode.none": {
+    "en": "citation verification skipped",
+    "zh": "已跳过引文验证"
   },
   "exec.running": {
     "en": "[EXECUTING R CODE...]",
