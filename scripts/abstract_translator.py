@@ -247,9 +247,11 @@ def format_ascii(result: Dict) -> str:
 def main():
     p = argparse.ArgumentParser(description="Auto-translate English abstracts")
     p.add_argument("--text", type=str, default=None, help="input text")
-    p.add_argument("--file", type=str, default=None, help="input file path")
+    p.add_argument("--file", type=str, default=None,
+                   help="input file path (reads only this local file you specify; no other file access)")
     p.add_argument("--format", choices=["json", "ascii"], default="ascii")
-    p.add_argument("--output", type=str, default=None)
+    p.add_argument("--output", type=str, default=None,
+                   help="output file path (writes only to this local path you specify)")
     
     args = p.parse_args()
     

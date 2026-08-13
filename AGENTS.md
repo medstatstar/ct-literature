@@ -18,7 +18,7 @@
 - Scripts: stdlib `urllib` for fetch (no hard `requests` dependency in fetch path); `normalize.py` / `report.py` are pure local.
 - SAFE PREVIEW default: network runs only with `--run`.
 - Zero confidential data or information input (B-tier).
-- Common files (`scripts/i18n.py`, `scripts/r_libs.py`, `references/language_policy.md`, `references/report_template.md`) are copied from `ct-base` — do not fork them here; sync from ct-base instead.
+- Common files (`scripts/i18n.py`, `references/language_policy.md`, `references/report_template.md`) are copied from `ct-base` — do not fork them here; sync from ct-base instead. (`scripts/r_libs.py` was previously vendored but removed in v0.6.12 — this skill is pure Python and never calls R.)
 
 ## Self-improvement
 

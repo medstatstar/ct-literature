@@ -486,7 +486,8 @@ def main():
     ap.add_argument("--in", default=".merged.json", dest="inp", help=".merged.json path")
     ap.add_argument("--run", action="store_true", help="perform live verification")
     ap.add_argument("--no-consistency", action="store_true",
-                   help="skip title/author consistency cross-check")
+                   help="skip title/author consistency cross-check "
+                        "(⚠️ weakens the anti-hallucination guarantee; debugging only)")
     ap.add_argument("--timeout", type=int, default=15)
     args = ap.parse_args()
     import json

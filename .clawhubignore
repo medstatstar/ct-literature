@@ -10,15 +10,9 @@
 
 # ── Local build / test artifacts (keep the package lean) ──
 out_*/
-tests/out/
-tests/results/
-tests/smoke_out/
-tests/scenario10_run/
-tests/scenario10b_run/
-tests/scenario10b_run/
-# 硬化回归脚本（开发产物，不纳入发布包）
-tests/scenario10c.py
-tests/scenario10c_x10.py
+# 测试内容（源码 + 夹具 + 运行产物）一律不进发布包（ct-base §16.8 红线，2026-08-13）
+tests/
+scripts/tests/
 __pycache__/
 *.pyc
 # 一次性开发工具（迁移/批量修复脚本，非技能运行所需，不进发布包）

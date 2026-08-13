@@ -10,7 +10,7 @@
 
 > 💡 **默认无 key 也能跑，但免费 key 能大幅提额：** OpenAlex 自 2026-02-13 起强制要求 key；无 key 时处于 keyless 池（100 credits/天，标注 *not suitable for production*）。免费 key 可提到 100k/天。申请约 30 秒 —— 见 §7 及技能在检测不到 key 时自动打印的申请提示。
 
-> 不需要命令，也不需要手册。你只要在对话里用**自然语言**说清想查什么：技能从 OpenAlex（主源）加可选的 Europe PMC / Semantic Scholar 取数，然后写出自包含的 **HTML + Excel** 报告。B 档：计算完全本地，仅对外公开检索。**注意：你的主题词会发往下方公开文献 API —— 出站说明见 §7。**
+> 不需要命令，也不需要手册。你只要在对话里用**自然语言**说清想查什么：技能从 OpenAlex（主源）加可选的 Europe PMC / Semantic Scholar 取数，然后写出自包含的 **HTML + Excel** 报告。B 档：计算完全本地，仅对外公开检索。**注意：你的主题词会发往下方公开文献 API —— 出站说明见 §7。** 技能**仅在你明确发起文献检索时激活**，不会在不相关对话中自行联网检索。
 
 ## 目录
 - [适用人群](#适用人群)
@@ -99,7 +99,7 @@ ct-literature 是一个**对话式技能**：你只要把想查的内容告诉�
 大规模检索怎么突破 100/天的限额？
 
 **助手会这样回（示意）：**
-在 <https://openalex.org/settings/api> 申请免费 key（约 30 秒），然后自行配置即可——技能**绝不要求你把 key 粘进对话**。三种方式任选其一：(a) 在 `ct-literature/.env` 加一行 `OPENALEX_API_KEY=<key>`；(b) 设为环境变量 `OPENALEX_API_KEY`；(c) 命令行传 `--openalex-key <key>`。key 仅本地存储，只通过 HTTPS 发往官方 OpenAlex API。
+在 <https://openalex.org/settings/api> 申请免费 key（约 30 秒）。然后按你习惯的方式配置即可——**在对话里告诉助手你想配置 key**（它用 Write/Edit 把 `OPENALEX_API_KEY=<key>` 写进 `ct-literature/.env`；key 仅本地存储、绝不回显、绝不写日志，只经 HTTPS 发往官方 OpenAlex API）；或自行配置：(a) 在 `ct-literature/.env` 加一行 `OPENALEX_API_KEY=<key>`，(b) 设为环境变量 `OPENALEX_API_KEY`，(c) 命令行传 `--openalex-key <key>`。**注意**：聊天消息可能被平台记录留存——如需最高隐秘性，请走自配置 (a)–(c)。
 
 ### 示例 5 · 拿 Excel 交付物
 **你这样说：**
@@ -222,7 +222,7 @@ ct-literature 是一个**对话式技能**：你只要把想查的内容告诉�
 ### 出站与隐私（仅公开检索）
 - **唯一出站路径 = 公开文献 API**：运行检索时，你的主题词与筛选条件会发往 **OpenAlex**（`api.openalex.org`）、**Europe PMC**（`ebi.ac.uk/europepmc`）、**Semantic Scholar**（`api.semanticscholar.org`）—— 仅你启用的源。引文验证（默认开启）期间，技能还会额外访问 **`doi.org`**（DOI 解析）与 **Crossref**（`api.crossref.org`，用于标题/作者一致性校验）。**无其他出站路径，也绝不发送任何保密 / 申办方数据**。
 - **密钥留在你本机**：若配置了 OpenAlex / S2 key，从你本地的 `ct-literature/.env` 读取，**绝不随包分发** —— `.env` 已被 `.gitignore`（GitHub）/ `.clawhubignore`（ClawHub）排除，SkillHub 窄白名单也不含它；随包发布的只有 `.env.example` 模板。重新安装后需你自己再次填入 key。
-- **key 必须由你自行申请——技能不代发、也不内置任何 key**：OpenAlex 免费 key 请自行到 <https://openalex.org/settings/api> 申请（约 30 秒），在对话里把 key 发给助手即可（它由 Write/Edit 工具写进 `.env`；key 明文绝不回显、不写日志、除经 HTTPS 发往官方 OpenAlex API 外不发往任何地方）。**切勿从他人 `.env` 复制 key，也切勿把 `.env` 提交进仓库。**
+- **key 必须由你自行申请——技能不代发、也不内置任何 key**：OpenAlex 免费 key 请自行到 <https://openalex.org/settings/api> 申请（约 30 秒）。配置方式按你习惯：**在对话里告诉助手你想配置 key**（它用 Write/Edit 把 key 写进 `ct-literature/.env`；key 仅本地存储、绝不回显、绝不写日志，只经 HTTPS 发往官方 OpenAlex API），或按 §7 自行配置（`.env` / 环境变量 / `--openalex-key`）。**提醒**：聊天消息可能被平台记录留存——如需最高隐秘性，优先走 §7 自配置。切勿从他人 `.env` 复制 key，切勿把 `.env` 提交进仓库。
 
 ---
 
@@ -263,7 +263,7 @@ ct-literature/
 │   ├── obsidian_exporter.py # Obsidian 笔记 + MOC
 │   ├── zotero_exporter.py   # Zotero RIS/CSV
 │   ├── i18n.py              # 双语唯一真源
-│   └── excel_style.py、r_libs.py 等  # 共享样式 / R 桥接桩
+│   └── excel_style.py 等              # 共享样式（ct-base vendor）
 ├── references/              # SOP、key 配置、检索菜单、多库方法
 └── assets/icon.svg          # B 档 logo
 ```

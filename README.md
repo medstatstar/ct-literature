@@ -10,7 +10,7 @@
 
 > 💡 **Keyless by default, but a free key lifts the cap a lot:** OpenAlex has required an API key since 2026-02-13; without one you are in the keyless pool (100 credits/day, flagged *not suitable for production*). A free key lifts this to 100k/day. Apply in ~30s — see §7 and the key-notice the skill prints automatically when no key is detected.
 
-> No commands or manual needed. Just describe your literature question **in plain language inside a chat** — the skill fetches from OpenAlex (primary) plus optional Europe PMC / Semantic Scholar, then writes a self-contained **HTML + Excel** report. B-tier: fully local computation, only public retrieval. **Note: your topic query is sent to the public bibliographic APIs below — see the outbound notice in §7.**
+> No commands or manual needed. Just describe your literature question **in plain language inside a chat** — the skill fetches from OpenAlex (primary) plus optional Europe PMC / Semantic Scholar, then writes a self-contained **HTML + Excel** report. B-tier: fully local computation, only public retrieval. **Note: your topic query is sent to the public bibliographic APIs below — see the outbound notice in §7.** The skill activates **only when you explicitly ask for a literature search**; it never retrieves on its own during unrelated conversations.
 
 ## Table of Contents
 - [Who This Is For](#who-this-is-for)
@@ -99,7 +99,7 @@ Adding `--with-europepmc` (MeSH precision) and `--with-semantic-scholar` (citati
 How do I lift the 100/day limit for large searches?
 
 **Assistant replies (sketch):**
-Apply for a free key (~30s) at <https://openalex.org/settings/api>, then configure it yourself — pick any one of three ways (the skill never asks you to paste a key into chat): (a) add `OPENALEX_API_KEY=<key>` to `ct-literature/.env`; (b) export it as an environment variable `OPENALEX_API_KEY`; or (c) pass `--openalex-key <key>` on the command line. The key is stored locally and sent only over HTTPS to the official OpenAlex API.
+Apply for a free key (~30s) at <https://openalex.org/settings/api>. Then configure it the way you prefer — **tell the assistant in chat that you want to set up the key** (it writes `OPENALEX_API_KEY=<key>` to `ct-literature/.env` via Write/Edit; the key is stored locally, never echoed back, never logged, and sent only over HTTPS to the official OpenAlex API), or do it yourself via (a) adding `OPENALEX_API_KEY=<key>` to `ct-literature/.env`, (b) exporting an `OPENALEX_API_KEY` environment variable, or (c) passing `--openalex-key <key>` on the command line. **Note:** chat messages may be logged or retained by the platform — if you want maximum secrecy, use the self-config routes (a)–(c).
 
 ### Example 5 · Get the Excel deliverable
 **You say:**
@@ -222,7 +222,7 @@ The skill covers published-evidence retrieval across the clinical-trial lifecycl
 ### Outbound & Privacy (public retrieval only)
 - **The only outbound paths = the public bibliographic APIs:** when you run a search, your topic query + filters are sent to **OpenAlex** (`api.openalex.org`), **Europe PMC** (`ebi.ac.uk/europepmc`), and **Semantic Scholar** (`api.semanticscholar.org`) — only the sources you enable. During citation verification (default ON) the skill additionally contacts **`doi.org`** (DOI resolution) and **Crossref** (`api.crossref.org`, for the title/author consistency check). There is **no other outbound path** and **no confidential / sponsor data is ever sent**.
 - **Keys stay on your machine:** If you configure an OpenAlex / S2 key, it is read from your local `ct-literature/.env` and **never ships with the package** — `.env` is excluded by `.gitignore` (GitHub) / `.clawhubignore` (ClawHub), and SkillHub's narrow allowlist also omits it; only `.env.example` ships. After a reinstall you re-enter the key yourself.
-- **You must apply for your own key — the skill does not bundle or provision one:** Get a free OpenAlex key yourself at <https://openalex.org/settings/api> (~30s) and paste it to the assistant in chat (it writes it to `.env` for you; the key is never echoed back, logged, or sent anywhere except over HTTPS to the official OpenAlex API). **Never copy a key from anyone else's `.env`, and never commit `.env` to a repo.**
+- **You must apply for your own key — the skill does not bundle or provision one:** Get a free OpenAlex key yourself at <https://openalex.org/settings/api> (~30s). To configure it, either **tell the assistant in chat that you want to set it up** (it writes the key to `ct-literature/.env` via Write/Edit; the key is stored locally, never echoed back, never logged, and sent only over HTTPS to the official OpenAlex API), or set it yourself via §7 (`.env` / env var / `--openalex-key`). **Reminder:** chat messages may be logged or retained — for maximum secrecy, prefer the self-config routes in §7. Never copy a key from someone else's `.env`, and never commit `.env` to a repo.
 
 ---
 
@@ -263,7 +263,7 @@ ct-literature/
 │   ├── obsidian_exporter.py # Obsidian notes + MOC
 │   ├── zotero_exporter.py   # Zotero RIS/CSV
 │   ├── i18n.py              # bilingual single source of truth
-│   └── excel_style.py, r_libs.py, …  # shared style / R-bridge stubs
+│   └── excel_style.py, …             # shared style (ct-base vendor)
 ├── references/              # SOP, key setup, search menu, multi-db method
 └── assets/icon.svg          # B-tier logo
 ```

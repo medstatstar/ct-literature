@@ -3,11 +3,11 @@ slug: ct-literature
 name: ct-literature
 displayName: 临床试验文献检索专家 / Clinical Trial Literature Search
 cn_name: 临床试验文献检索专家
-version: 0.6.11
+version: 0.6.12
 invocable: true
-summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + Semantic Scholar 引用增强 + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集；B 档公开检索，零保密输入。
+summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + Semantic Scholar 引用增强 + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集，附带本地英文→中文摘要翻译助手；B 档公开检索，零保密输入。
 license: MIT
-description: "检索公开学术文献并归一化合并为统一去重证据库：OpenAlex（主源，免费、含引用数）+ Europe PMC（MEDLINE/MeSH，生物医学精准）+ Semantic Scholar（引用排序，可选）。按综述类型、年份区间筛选，并提供安全性/CSM 偏置模式以提取已发表不良事件/药物警戒文献。产出 JSON + Markdown。仅读公开文献，零保密数据输入，B 档（普通输入 + 对外检索）。含引文标识实时验证与证据溯源日志（反幻觉，ct-base §17.1）。 / Search public scholarly literature and normalize it into one de-duplicated evidence base: OpenAlex (primary, free, citation-rich) + Europe PMC (MEDLINE/MeSH, biomedical precision) + Semantic Scholar (citation ranking, optional). Filter by review type, year range, and a safety/CSM bias mode that surfaces published adverse-event / pharmacovigilance literature. Produces JSON + Markdown. Reads only public publications; zero confidential input, B-tier (ordinary input + public retrieval). Includes citation-identifier verification and a provenance evidence log (anti-hallucination, ct-base §17.1)."
+description: "检索公开学术文献并归一化合并为统一去重证据库：OpenAlex（主源，免费、含引用数）+ Europe PMC（MEDLINE/MeSH，生物医学精准）+ Semantic Scholar（引用排序，可选）。按综述类型、年份区间筛选，并提供安全性/CSM 偏置模式以提取已发表不良事件/药物警戒文献。产出 JSON + Markdown。仅读公开文献，零保密数据输入，B 档（普通输入 + 对外检索）。含引文标识实时验证与证据溯源日志（反幻觉，ct-base §17.1），并附带本地英文→中文摘要翻译助手。 / Search public scholarly literature and normalize it into one de-duplicated evidence base: OpenAlex (primary, free, citation-rich) + Europe PMC (MEDLINE/MeSH, biomedical precision) + Semantic Scholar (citation ranking, optional). Filter by review type, year range, and a safety/CSM bias mode that surfaces published adverse-event / pharmacovigilance literature. Produces JSON + Markdown. Reads only public publications; zero confidential input, B-tier (ordinary input + public retrieval). Includes citation-identifier verification, a provenance evidence log (anti-hallucination, ct-base §17.1), and a local English→Chinese abstract translation helper."
 triggers:
   - "systematic literature search"
   - "系统文献检索"

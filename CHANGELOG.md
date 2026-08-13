@@ -3,6 +3,42 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.6.12 — 2026-08-13
+
+### Security-audit fixes (ClawHub / NVIDIA SkillSpector, 21 findings)
+- **README: unify API-key setup to the conversational flow (user preference)** — both READMEs
+  now give one consistent story: tell the assistant in chat to configure the key (it writes it
+  to the local `.env` via Write/Edit; never echoed back, never logged, sent only over HTTPS to
+  the official API), or self-configure via `.env` / env var / `--openalex-key`; with an explicit
+  notice that chat may be logged and self-config is the most secretive route. Fixes the
+  internal contradiction SkillSpector flagged (6+ findings: one section said "never paste",
+  another told you to); the conversational option is kept intentionally per user preference,
+  accepting a residual chat-channel advisory. `http_utils` key-notice i18n strings updated to
+  the same dual-path wording.
+- **Remove all R-only dead code and messages** — this skill is pure Python
+  (`required_commands: [python]`) and never calls R. Deleted `scripts/r_libs.py` (vendored
+  ct-base stub, zero references here) and 13 R-only keys from `i18n_messages.json`
+  (`error.rscript_not_found*`, `error.r_timeout`, `error.invalid_temp_path`,
+  `error.invalid_install_path`, `install.*`, `header.r_code`, `header.install_cmd`). This also
+  eliminates the stale "CRAN is the ONLY network operation" claim — that message applied to an
+  R install flow this skill never uses. README/AGENTS reference lists updated.
+- **SKILL.md summary/description now mention the local EN→ZH abstract translation helper**
+  (eliminates the manifest-vs-behavior mismatch flagged at High/95%).
+- **drug_name_resolver: auto mode now matches its docstring** — only a *unique* candidate is
+  auto-translated; ambiguous names (multiple candidates) return unresolved instead of silently
+  picking the first (could bias downstream queries in a biomedical context).
+- **CLI help hardening**: `--no-verify-citations` / `--no-consistency` now carry a WARNING that
+  they weaken the anti-hallucination gate (ct-base §17.1; debugging only); `abstract_translator
+  --file/--output` now state they read/write only the paths you specify.
+- **README: explicit activation boundary** — the skill activates only when the user explicitly
+  asks for a literature search (addresses Vague-Triggers findings).
+
+### Packaging note
+- ClawHub audit scans confirmed the previously published package **contained `tests/`**.
+  Per the new ct-base §16.8 red-line ("test content never ships"), the next publish must
+  rebuild a clean package (`git archive` staging + `rm -rf tests scripts/tests`) and drop
+  `tests/` via `.clawhubignore` (already updated).
+
 ## v0.6.11 — 2026-08-12
 
 ### Feature · title/author consistency cross-check in citation verification (anti-hallucination depth)

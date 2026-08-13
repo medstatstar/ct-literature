@@ -468,10 +468,12 @@ def main():
     ap.add_argument("--verify-top-n", type=int, default=15,
                     help="N for --verify top (default 15): number of top-ranked works to verify")
     ap.add_argument("--no-verify-citations", action="store_true",
-                    help="legacy alias for `--verify none` (disable citation verification)")
+                    help="legacy alias for `--verify none` (disable citation verification). "
+                         "⚠️ WARNING: disables the anti-hallucination gate (ct-base §17.1); use only for debugging or non-critical scoping.")
     ap.add_argument("--no-consistency", action="store_true",
                     help="skip the title/author consistency cross-check (identifier still "
-                         "resolved, but not compared against the resolved paper's metadata)")
+                         "resolved, but not compared against the resolved paper's metadata). "
+                         "⚠️ WARNING: weakens the anti-hallucination guarantee; debugging only.")
     # ---- F: literature-manager integration ----
     ap.add_argument("--obsidian", action="store_true",
                     help="export Obsidian notes (per-paper .md + MOC index, "
