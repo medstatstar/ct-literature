@@ -3,7 +3,17 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
-## v0.6.14 — 2026-08-14
+## v0.7.0 — 2026-08-14
+
+> v0.6.13（进度事件流）与 v0.6.14（架构优化）开发版均未单独发布，功能统一并入 v0.7.0。
+
+### Feature · progress event stream (`--progress json`, agent-facing)
+- New `--progress {human,json}` flag on `ct_literature.py` (default `human` = unchanged console
+  output). In `json` mode stdout carries **only** a flushed NDJSON event stream —
+  `run_start / source_done / source_failed / fetch_done / verify_progress / verify_done /
+  evidence_log / intermediate / export_done / export_failed / run_done` — and sub-module
+  prints are redirected to **stderr** so the stream stays parseable for agents.
+- Human mode additionally gained per-source progress lines (`[OK] source OpenAlex: N works in X.Xs`).
 
 ### Performance · architecture-level wait-time reduction
 - **Pooled HTTP connections** (`adapters/http_utils.py`): replaced the per-request
@@ -25,26 +35,8 @@ ct- library convention (B-tier public-intel skill, semver-ish).
   `report_verified` → `run_done` (export events carry `verified: false|true`).
 - All existing modes (`all` / `top` / `none`) and human/json progress output are unchanged
   (regression-tested; verified 4/4 in `all` and `top`, connection reuse confirmed).
-- **Prepublish cleanup**: removed 6 Coze-specific i18n messages (zero runtime references —
-  `auth.coze_outbound`, `auth.coze_outbound_denied`, `auth.serial_blocked`, `error.coze_401`,
-  `error.fallback_local`, `error.requests_missing`) that were vendored leftovers from ct-base
-  (ct-literature has no Coze endpoint; they also fed SkillSpector Autonomous-Decision-Making
-  findings). SKILL.md "zero confidential input" reworded to "zero confidential research /
-  subject data input (API keys are local config, never research data)".
-
-## v0.6.13 — 2026-08-14
-
-### Feature · progress event stream (`--progress json`, agent-facing)
-- New `--progress {human,json}` flag on `ct_literature.py` (default `human` = unchanged console
-  output). In `json` mode stdout carries **only** a flushed NDJSON event stream —
-  `run_start / source_done / source_failed / fetch_done / verify_progress / verify_done /
-  evidence_log / intermediate / export_done / export_failed / run_done` — and sub-module
-  prints are redirected to **stderr** so the stream stays parseable for agents.
-- Human mode additionally gained per-source progress lines (`[OK] source OpenAlex: N works in X.Xs`).
-- **Why**: the pipeline is already internally streamed (fetch ∥ verify, producer-consumer);
-  the only block was the single-shot report output. Streaming the progress events gives users /
-  agents first-visible-result and per-source progress without changing total wall-clock
-  (bottleneck is network round-trips — unchanged).
+- **Measured speed-up (verify all, 20 works)**: verification segment ~119 s → ~35 s (~3.4×,
+  -70%); two-phase key path 3.5 s to a usable report (~35× faster time-to-first-result).
 
 ### Docs (README FAQ, 2026-08-13)
 - FAQ "How long does a search take": fixed misleading "per-source concurrency" → precise
@@ -54,6 +46,14 @@ ct- library convention (B-tier public-intel skill, semver-ish).
   methods only, never violates site terms → no bulk-crawl effect) + parallel/serial structure
   + bottleneck (verification) + speed-up knobs. Synced into ct-base §13.8 as a mandatory FAQ
   item for any skill with data-fetch operations.
+
+### Prepublish cleanup
+- Removed 6 Coze-specific i18n messages (zero runtime references — `auth.coze_outbound`,
+  `auth.coze_outbound_denied`, `auth.serial_blocked`, `error.coze_401`, `error.fallback_local`,
+  `error.requests_missing`) that were vendored leftovers from ct-base (ct-literature has no
+  Coze endpoint; they also fed SkillSpector Autonomous-Decision-Making findings).
+- SKILL.md "zero confidential input" reworded to "zero confidential research / subject data
+  input (API keys are local config, never research data)".
 
 ## v0.6.12 — 2026-08-13
 

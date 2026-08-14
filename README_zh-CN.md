@@ -294,12 +294,12 @@ python scripts/ct_literature.py --topic "osimertinib" --run --verify top --verif
 python scripts/ct_literature.py --topic "osimertinib" --run --verify none --out-dir ./out
 # v0.6.11 · 跳过标题/作者一致性层（验证仍会解析标识符）
 python scripts/ct_literature.py --topic "osimertinib" --run --no-consistency --out-dir ./out
-# v0.6.13 · 进度以 NDJSON 事件流输出到 stdout（面向 agent：--progress json 会把子模块
+# v0.7.0 · 进度以 NDJSON 事件流输出到 stdout（面向 agent：--progress json 会把子模块
 # print 重定向到 stderr，保证 stdout 可解析；事件含 run_start / source_done / source_failed /
 # fetch_done / verify_progress / verify_done / evidence_log / export_done / export_failed /
 # run_done，每行一个 JSON 对象、实时 flush）
 python scripts/ct_literature.py --topic "osimertinib" --run --progress json --out-dir ./out
-# v0.6.14 · 两阶段交付：报告数秒即出（未验证版），验证结果后台回填后自动重渲染
+# v0.7.0 · 两阶段交付：报告数秒即出（未验证版），验证结果后台回填后自动重渲染
 python scripts/ct_literature.py --topic "osimertinib" --run --verify background --out-dir ./out
 
 # P1 · PROSPERO 系统评价注册库（可选，保留接口，未提供 token 前自动空跳过）
