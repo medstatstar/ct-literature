@@ -25,6 +25,12 @@ ct- library convention (B-tier public-intel skill, semver-ish).
   `report_verified` → `run_done` (export events carry `verified: false|true`).
 - All existing modes (`all` / `top` / `none`) and human/json progress output are unchanged
   (regression-tested; verified 4/4 in `all` and `top`, connection reuse confirmed).
+- **Prepublish cleanup**: removed 6 Coze-specific i18n messages (zero runtime references —
+  `auth.coze_outbound`, `auth.coze_outbound_denied`, `auth.serial_blocked`, `error.coze_401`,
+  `error.fallback_local`, `error.requests_missing`) that were vendored leftovers from ct-base
+  (ct-literature has no Coze endpoint; they also fed SkillSpector Autonomous-Decision-Making
+  findings). SKILL.md "zero confidential input" reworded to "zero confidential research /
+  subject data input (API keys are local config, never research data)".
 
 ## v0.6.13 — 2026-08-14
 
