@@ -294,6 +294,11 @@ python scripts/ct_literature.py --topic "osimertinib" --run --verify top --verif
 python scripts/ct_literature.py --topic "osimertinib" --run --verify none --out-dir ./out
 # v0.6.11 · skip the title/author consistency layer (verification still resolves identifiers)
 python scripts/ct_literature.py --topic "osimertinib" --run --no-consistency --out-dir ./out
+# v0.6.13 · stream progress as NDJSON events on stdout (agent-facing: --progress json
+# redirects sub-module prints to stderr, so stdout stays parseable; events:
+# run_start / source_done / source_failed / fetch_done / verify_progress / verify_done /
+# evidence_log / export_done / export_failed / run_done, one JSON object per line, flushed)
+python scripts/ct_literature.py --topic "osimertinib" --run --progress json --out-dir ./out
 
 # P1 · PROSPERO systematic-review registry (opt-in, reserved source — dormant until a token is set)
 python scripts/ct_literature.py --topic "osimertinib" \

@@ -68,6 +68,31 @@ def _friendly_source_note(source, exc):
             "message_zh": msg_zh, "message_en": msg_en, "banner": cur}
 
 
+# ── progress event stream (--progress json) ───────────────────────────────────
+# human（默认）：保持可读控制台进度；json：stdout 只输出 NDJSON 事件流（供 agent 流式消费）。
+_PROGRESS = "human"
+_ORIG_STDOUT = None  # json 模式下保留真 stdout；子模块进度 print 转 stderr 保持 NDJSON 纯净
+
+
+def _out(human_msg=None, event=None, **fields):
+    """Emit one progress line.
+
+    - human mode (default): print `human_msg` (None = silent, for json-only events).
+    - json mode: print a single-line JSON object {"event": <event>, **fields} on the
+      real stdout (always flushed so an agent can stream it); the human message is
+      suppressed and stdout stays pure NDJSON (sub-module prints are redirected to
+      stderr by main()).
+    """
+    if _PROGRESS == "json":
+        rec = {"event": event} if event else {}
+        rec.update(fields)
+        print(json.dumps(rec, ensure_ascii=False),
+              file=_ORIG_STDOUT if _ORIG_STDOUT is not None else sys.stdout,
+              flush=True)
+    elif human_msg:
+        print(human_msg, flush=True)
+
+
 def _verify_top_n(works, n, timeout=15, check_consistency=True):
     """Verify only the top-N (already ranked) works concurrently.
 
@@ -170,8 +195,13 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     # after ranking (only the top-N); in `none` we skip verification entirely.
     _should_stream = (verify_mode == "all" and jobs)
     if _should_stream:
-        print("[verify] mode=all (streaming; source-aware skip on same-source re-resolution)")
+        _out("[verify] mode=all (streaming; source-aware skip on same-source re-resolution)",
+             "verify_mode", mode="all")
+        _verify_done = 0
+        _verify_lock = threading.Lock()
+
         def _verify_worker():
+            nonlocal _verify_done
             while True:
                 _item = _verify_q.get()
                 if _item is None:
@@ -191,6 +221,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                     _verify_results[_k] = {"citation_verified": False,
                                           "citation_verify_status": "unresolved",
                                           "citation_verify_note": "verify-error: %s" % _ve}
+                with _verify_lock:
+                    _verify_done += 1
+                    _done = _verify_done
+                _out(None, "verify_progress", done=_done)
                 _verify_q.task_done()
 
         _vw = min(8, max(1, len(jobs)))  # cap concurrency to avoid API throttling
@@ -208,10 +242,12 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         _vmode = i18n.t("run.vmode.top", n=verify_top_n)
     else:
         _vmode = i18n.t("run.vmode.%s" % verify_mode)
-    print(i18n.t("run.starting", est=_est, vmode=_vmode, out=out_dir))
+    _out(i18n.t("run.starting", est=_est, vmode=_vmode, out=out_dir),
+         "run_start", est=_est, vmode=_vmode, out=out_dir)
 
     if jobs:
         _t0 = time.time()
+        _t_start = {n: time.time() for n, _ in jobs}
         with ThreadPoolExecutor(max_workers=len(jobs)) as _ex:
             _futs = {_ex.submit(fn): name for name, fn in jobs}
             _res = {}
@@ -220,13 +256,19 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 try:
                     _p = _fut.result()
                     _res[_name] = _p
+                    _n = len((_p or {}).get("works") or [])
+                    _out("[OK] source %s: %d works in %.1fs"
+                         % (_name, _n, time.time() - _t_start[_name]),
+                         "source_done", source=_name, n=_n,
+                         secs=round(time.time() - _t_start[_name], 1))
                     # stream this source's works into the verification queue immediately
                     if _should_stream and _p is not None:
                         for _w in (_p.get("works") or []):
                             _verify_q.put((_w, verify_citations.work_key(_w), _w.get("source")))
                 except Exception as _e:  # one source failing must not kill the pipeline
                     _note = _friendly_source_note(_name, _e)
-                    print(_note["banner"])
+                    _out(_note["banner"], "source_failed", source=_name,
+                         status=_note.get("status"), message_en=_note.get("message_en"))
                     source_notes.append(_note)
                     _res[_name] = None
         # re-assemble in the original (stable) source order
@@ -234,10 +276,11 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             _p = _res.get(_name)
             if _p is not None:
                 payloads.append(_p)
-        print("[OK] parallel fetch: %d source(s) in %.1fs"
-              % (len(jobs), time.time() - _t0))
+        _out("[OK] parallel fetch: %d source(s) in %.1fs"
+             % (len(jobs), time.time() - _t0),
+             "fetch_done", sources=len(jobs), secs=round(time.time() - _t0, 1))
     else:
-        print("[WARN] no sources enabled")
+        _out("[WARN] no sources enabled", "no_sources")
 
     # drain the verification workers (they finish as the queue empties)
     for _ in _verify_workers:
@@ -275,8 +318,9 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         vsum = verify_citations.summarize_results(_verify_results)
         vsum["mode"] = "all"
         vsum["skipped_preview"] = False
-        print("[OK] citation verification (concurrent, all): %s"
-              % json.dumps(vsum, ensure_ascii=False))
+        _out("[OK] citation verification (concurrent, all): %s"
+             % json.dumps(vsum, ensure_ascii=False),
+             "verify_done", mode="all", summary=vsum)
     elif verify_mode == "top":
         _tv, _skipped = _verify_top_n(works, verify_top_n,
                                       check_consistency=verify_consistency)
@@ -293,8 +337,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         vsum["mode"] = "top"
         vsum["top_n"] = verify_top_n
         vsum["skipped_preview"] = False
-        print("[OK] citation verification (top-%d, sampled %d): %s"
-              % (verify_top_n, _skipped, json.dumps(vsum, ensure_ascii=False)))
+        _out("[OK] citation verification (top-%d, sampled %d): %s"
+             % (verify_top_n, _skipped, json.dumps(vsum, ensure_ascii=False)),
+             "verify_done", mode="top", top_n=verify_top_n,
+             sampled=_skipped, summary=vsum)
     else:  # verify_mode == "none"
         for _w in works:
             _w.setdefault("citation_verified", False)
@@ -304,7 +350,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 "no_identifier": len(works), "suspicious": 0, "mismatch": 0,
                 "unverified_sampled": 0, "skipped_preview": True,
                 "mode": "none"}
-        print("[OK] citation verification skipped (mode=none)")
+        _out("[OK] citation verification skipped (mode=none)", "verify_done", mode="none")
 
     # ---- build meta (shared by report / xlsx / html / evidence log) ----
     meta = {"topic": topic, "review_type": review_type,
@@ -333,9 +379,11 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                                         degraded=source_notes)
     ev_res = evidence_log.write_log(evidence, out_dir)
     meta["evidence_log"] = evidence
-    print("[OK] evidence_log -> %s / %s" % (ev_res["json"], ev_res["md"]))
+    _out("[OK] evidence_log -> %s / %s" % (ev_res["json"], ev_res["md"]),
+         "evidence_log", json_path=ev_res["json"], md_path=ev_res["md"])
     if oa_status == "missing":
-        print("[WARN] OpenAlex ran in keyless mode — re-run with a configured key for full coverage.")
+        _out("[WARN] OpenAlex ran in keyless mode — re-run with a configured key for full coverage.",
+             "warn", kind="keyless")
 
     out_data = {"count": len(works), "works": works}
     if prisma_block:
@@ -344,7 +392,8 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     out_data["verification"] = vsum
     with open(merged_json, "w", encoding="utf-8") as f:
         json.dump(out_data, f, ensure_ascii=False, indent=2)
-    print("[OK] intermediate state -> %s (hidden; reused by standalone tools)" % merged_json)
+    _out("[OK] intermediate state -> %s (hidden; reused by standalone tools)" % merged_json,
+         "intermediate", path=merged_json)
     primary = None
 
     # ---- P0-A: citation formatting + BibTeX/RIS export ----
@@ -353,10 +402,13 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             fc = format_citations.export_citations(
                 {"count": len(works), "works": works}, style=citation_style,
                 out_dir=out_dir, lang="auto")
-            print("[OK] citations(%s) -> %s / %s" % (
-                citation_style, fc["bib_path"], fc["ris_path"]))
+            _out("[OK] citations(%s) -> %s / %s" % (
+                citation_style, fc["bib_path"], fc["ris_path"]),
+                "export_done", kind="citations",
+                bib=fc["bib_path"], ris=fc["ris_path"])
         except Exception as _ce:
-            print("[WARN] citation export failed: %s" % _ce)
+            _out("[WARN] citation export failed: %s" % _ce,
+                 "export_failed", kind="citations", error=str(_ce))
 
     if make_xlsx:
         xlsx_out = os.path.join(out_dir, "lit_report.xlsx")
@@ -364,37 +416,44 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             export_xlsx.export_workbook(
                 {"count": len(works), "works": works, "meta": meta},
                 xlsx_out, lang=lang)
-            print("[OK] xlsx  ->", xlsx_out)
+            _out("[OK] xlsx  -> %s" % xlsx_out, "export_done", kind="xlsx", path=xlsx_out)
             primary = primary or xlsx_out
         except Exception as _xe:
-            print("[WARN] xlsx export failed: %s" % _xe)
+            _out("[WARN] xlsx export failed: %s" % _xe,
+                 "export_failed", kind="xlsx", error=str(_xe))
     if make_html:
         html_out = os.path.join(out_dir, "lit_report.html")
         try:
             html_text = export_html.render(out_data, lang)
             with open(html_out, "w", encoding="utf-8") as f:
                 f.write(html_text)
-            print("[OK] html  ->", html_out)
+            _out("[OK] html  -> %s" % html_out, "export_done", kind="html", path=html_out)
             primary = html_out
         except Exception as _he:
-            print("[WARN] html export failed: %s" % _he)
+            _out("[WARN] html export failed: %s" % _he,
+                 "export_failed", kind="html", error=str(_he))
 
     # ---- F: Obsidian / Zotero 文献管理软件集成 ----
     if obsidian:
         try:
             ob = obsidian_exporter.export_obsidian(
                 {"count": len(works), "works": works}, out_dir=out_dir, lang=lang)
-            print("[OK] obsidian notes=%d -> %s" % (ob["count"], ob["folder"]))
-            print("     moc -> %s" % ob["moc"])
+            _out("[OK] obsidian notes=%d -> %s" % (ob["count"], ob["folder"]),
+                 "export_done", kind="obsidian", count=ob["count"], folder=ob["folder"])
+            _out("     moc -> %s" % ob["moc"], "export_done", kind="obsidian_moc", path=ob["moc"])
         except Exception as _oe:
-            print("[WARN] obsidian export failed: %s" % _oe)
+            _out("[WARN] obsidian export failed: %s" % _oe,
+                 "export_failed", kind="obsidian", error=str(_oe))
     if zotero:
         try:
             zo = zotero_exporter.export_zotero(
                 {"count": len(works), "works": works}, out_dir=out_dir)
-            print("[OK] zotero csv/ris -> %s / %s" % (zo["csv"], zo["ris"]))
+            _out("[OK] zotero csv/ris -> %s / %s" % (zo["csv"], zo["ris"]),
+                 "export_done", kind="zotero", csv=zo["csv"], ris=zo["ris"])
         except Exception as _ze:
-            print("[WARN] zotero export failed: %s" % _ze)
+            _out("[WARN] zotero export failed: %s" % _ze,
+                 "export_failed", kind="zotero", error=str(_ze))
+    _out("[OK] run finished: %s" % primary, "run_done", primary=primary or "")
     return primary
 
 
@@ -484,7 +543,17 @@ def main():
                     help="UI language for xlsx / html / markdown / obsidian outputs. "
                          "auto = follow OS locale (zh in a Chinese locale, else en); "
                          "force zh or en to override.")
+    ap.add_argument("--progress", default="human", choices=["human", "json"],
+                    help="progress output mode: human (readable console, default) or "
+                         "json (NDJSON event stream on stdout — run_start / source_done / "
+                         "source_failed / fetch_done / verify_done / export_done; for agent use)")
     args = ap.parse_args()
+    global _PROGRESS, _ORIG_STDOUT
+    _PROGRESS = args.progress
+    if args.progress == "json":
+        # 子模块（fetch/report 等）的进度 print 全部转 stderr，stdout 只留 NDJSON 事件流
+        _ORIG_STDOUT = sys.stdout
+        sys.stdout = sys.stderr
 
     if not args.run:
         extra = []
@@ -501,8 +570,10 @@ def main():
         if args.with_prospero:
             extra.append("PROSPERO(token-gated)")
         srcs = "OpenAlex" + (" + " + ", ".join(extra) if extra else "")
-        print("[PREVIEW] would run literature pipeline: topic=%r review_type=%r safety=%s "
-              "sources=[%s] (use --run)" % (args.topic, args.review_type, args.safety, srcs))
+        _out("[PREVIEW] would run literature pipeline: topic=%r review_type=%r safety=%s "
+             "sources=[%s] (use --run)" % (args.topic, args.review_type, args.safety, srcs),
+             "preview", topic=args.topic, review_type=args.review_type,
+             safety=args.safety, sources=srcs)
         return
     run(args.topic, args.review_type, args.year_from, args.year_to, args.safety,
         args.max, args.with_europepmc, args.with_semantic_scholar,

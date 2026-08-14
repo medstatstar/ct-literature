@@ -3,6 +3,29 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.6.13 — 2026-08-14
+
+### Feature · progress event stream (`--progress json`, agent-facing)
+- New `--progress {human,json}` flag on `ct_literature.py` (default `human` = unchanged console
+  output). In `json` mode stdout carries **only** a flushed NDJSON event stream —
+  `run_start / source_done / source_failed / fetch_done / verify_progress / verify_done /
+  evidence_log / intermediate / export_done / export_failed / run_done` — and sub-module
+  prints are redirected to **stderr** so the stream stays parseable for agents.
+- Human mode additionally gained per-source progress lines (`[OK] source OpenAlex: N works in X.Xs`).
+- **Why**: the pipeline is already internally streamed (fetch ∥ verify, producer-consumer);
+  the only block was the single-shot report output. Streaming the progress events gives users /
+  agents first-visible-result and per-source progress without changing total wall-clock
+  (bottleneck is network round-trips — unchanged).
+
+### Docs (README FAQ, 2026-08-13)
+- FAQ "How long does a search take": fixed misleading "per-source concurrency" → precise
+  "sources run in parallel with each other, but each source pages serially (rate-limit / ban
+  safety)".
+- New FAQ "Why can't the fetch be faster?": compliance-first answer (official public access
+  methods only, never violates site terms → no bulk-crawl effect) + parallel/serial structure
+  + bottleneck (verification) + speed-up knobs. Synced into ct-base §13.8 as a mandatory FAQ
+  item for any skill with data-fetch operations.
+
 ## v0.6.12 — 2026-08-13
 
 ### Security-audit fixes (ClawHub / NVIDIA SkillSpector, 21 findings)
