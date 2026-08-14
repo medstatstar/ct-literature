@@ -580,7 +580,7 @@ def main():
                          "rank (fastest, good for large result sets); none = skip verification; "
                          "background = two-phase: emit an unverified report immediately, then "
                          "re-render with verification results when the background pass finishes. "
-                         "All modes apply source-aware skip (no redundant same-source re-resolution).")
+                         "All modes skip re-resolution of identifiers already trusted by provenance.")
     ap.add_argument("--verify-top-n", type=int, default=15,
                     help="N for --verify top (default 15): number of top-ranked works to verify")
     ap.add_argument("--no-verify-citations", action="store_true",
