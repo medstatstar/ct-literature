@@ -28,6 +28,8 @@ _LABELS = {
     "en": {
         "doc_title": "Literature Evidence Base",
         "generated": "Generated", "kpi.total": "Works", "kpi.safety": "Safety-related",
+        "search.topic": "Search Topic", "search.keywords": "Generated Keywords",
+        "search.filter": "Filter", "search.none": "—",
         "kpi.year": "Year Span", "kpi.topcited": "Top Cited",
         "works": "Works", "col.source": "Source", "col.id": "ID", "col.title": "Title",
         "col.authors": "Authors", "col.year": "Year", "col.pub": "Publication",
@@ -52,6 +54,8 @@ _LABELS = {
     "zh": {
         "doc_title": "文献证据库",
         "generated": "生成时间", "kpi.total": "文献数", "kpi.safety": "安全性相关",
+        "search.topic": "检索主题", "search.keywords": "生成关键字",
+        "search.filter": "筛选条件", "search.none": "—",
         "kpi.year": "年份跨度", "kpi.topcited": "最高被引",
         "works": "文献列表", "col.source": "来源", "col.id": "ID", "col.title": "标题",
         "col.authors": "作者", "col.year": "年份", "col.pub": "期刊",
@@ -173,6 +177,33 @@ def render(data, lang):
     works = data.get("works") or []
     total = data.get("count") or len(works)
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # search provenance (topic / generated keywords / filter) surfaced in the banner —
+    # the user's original query and the skill's derived keywords must be reproducible
+    # from the report itself, not just the evidence log.
+    meta = data.get("meta") or {}
+    _topic = meta.get("topic") or ""
+    _kw = meta.get("keywords")
+    if isinstance(_kw, str):
+        _kw_str = _kw  # 兼容字符串直传（standalone 调用方）
+    elif _kw:
+        _kw_str = ", ".join(str(x) for x in _kw)
+    else:
+        _kw_str = ""
+    _filters = []
+    if meta.get("review_type") and meta.get("review_type") != "all":
+        _filters.append("type=" + str(meta["review_type"]))
+    if meta.get("year_from") or meta.get("year_to"):
+        _filters.append("%s–%s" % (meta.get("year_from") or "?", meta.get("year_to") or "?"))
+    _filter_str = " · ".join(_filters) if _filters else ""
+    search_chips = []
+    if _topic:
+        search_chips.append(f'<span class="chip">{esc(L["search.topic"])}: <b>{esc(_topic)}</b></span>')
+    if _kw_str:
+        search_chips.append(f'<span class="chip">{esc(L["search.keywords"])}: <b>{esc(_kw_str)}</b></span>')
+    if _filter_str:
+        search_chips.append(f'<span class="chip">{esc(L["search.filter"])}: <b>{esc(_filter_str)}</b></span>')
+    searchinfo = ('<div class="searchinfo">' + "".join(search_chips) + "</div>") if search_chips else ""
 
     years = sorted({w.get("year") for w in works if w.get("year")})
     year_span = f"{years[0]}–{years[-1]}" if years else "—"
@@ -335,6 +366,10 @@ def render(data, lang):
                padding:22px 28px; }}
     .banner h1 {{ margin:0; font-size:22px; }}
     .banner .meta {{ margin-top:6px; font-size:12px; opacity:.85; }}
+    .banner .searchinfo {{ margin-top:8px; font-size:12px; display:flex; flex-wrap:wrap; gap:6px; }}
+    .banner .searchinfo .chip {{ background:rgba(255,255,255,.15); border-radius:10px;
+      padding:2px 10px; opacity:.95; }}
+    .banner .searchinfo .chip b {{ font-weight:600; }}
     .wrap {{ max-width:1180px; margin:0 auto; padding:20px 24px 60px; }}
     h2 {{ color:var(--navy); border-left:5px solid var(--blue); padding-left:10px;
           margin-top:30px; font-size:17px; }}
@@ -383,7 +418,7 @@ def render(data, lang):
 <style>{css}</style></head>
 <body>
 <div class="banner"><h1>{esc(L['doc_title'])}</h1>
-<div class="meta">{esc(L['generated'])}: {now} ｜ {total} works</div></div>
+<div class="meta">{esc(L['generated'])}: {now} ｜ {total} works</div>{searchinfo}</div>
 <div class="wrap">
   <div class="kpis">{kpi_html}</div>
 

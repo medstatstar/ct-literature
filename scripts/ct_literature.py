@@ -137,6 +137,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         prisma=DEFAULT_PRISMA, rank=DEFAULT_RANK, keywords=None,
         obsidian=False, zotero=False, lang="auto"):
     os.makedirs(out_dir, exist_ok=True)
+    # normalize --keywords (comma-separated string) → list once, so scoring AND all
+    # exporters (HTML banner / XLSX scope / meta JSON) see the same shape
+    if isinstance(keywords, str):
+        keywords = [k.strip() for k in keywords.split(",") if k.strip()]
     http_utils.notify_openalex_key_if_missing(openalex_key)
     oa_json = os.path.join(out_dir, "openalex.json")
     epmc_json = os.path.join(out_dir, "europepmc.json")
@@ -410,6 +414,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             out_data["prisma"] = prisma_block
         out_data["evidence_log"] = evidence
         out_data["verification"] = vsum
+        out_data["meta"] = meta  # topic / keywords / review_type / year span → HTML & XLSX headers
         with open(merged_json, "w", encoding="utf-8") as f:
             json.dump(out_data, f, ensure_ascii=False, indent=2)
         _out("[OK] intermediate state -> %s (hidden; reused by standalone tools)" % merged_json,

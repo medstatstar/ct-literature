@@ -122,6 +122,7 @@ _LOCAL = {
     # ---- README scope (search overview) ----
     "scope.title":     {"en": "Search scope", "zh": "检索概览"},
     "scope.topic":     {"en": "Topic", "zh": "检索主题"},
+    "scope.keywords":  {"en": "Generated keywords", "zh": "生成关键字"},
     "scope.filter":    {"en": "Filter", "zh": "检索范围"},
     "scope.source":    {"en": "Sources", "zh": "数据来源"},
     "scope.year":      {"en": "Year range", "zh": "时间范围"},
@@ -283,11 +284,14 @@ def build_readme(wb, data, fmts):
     yt = meta.get("year_to")
     yr_range = ("%s–%s" % (yf, yt)) if (yf or yt) else "—"
     rt = meta.get("review_type") or "all"
+    kw = meta.get("keywords")
+    kw_str = kw if isinstance(kw, str) else (", ".join(str(x) for x in kw) if kw else "—")
     scope = [
         (t("scope.topic"), topic or t("col.unknown")),
         (t("scope.filter"), rt),
         (t("scope.source"), src),
         (t("scope.year"), yr_range),
+        (t("scope.keywords"), kw_str),
     ]
     for k, v in scope:
         ws.write(r, 0, k, fmts["kpi_label"])
