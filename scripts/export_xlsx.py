@@ -258,9 +258,14 @@ def build_readme(wb, data, fmts):
 
     # rich-text subtitle (row 1): topic + generated time
     topic = meta.get("topic") or t("doc.title")
+    topic_en = meta.get("topic_en")
+    if topic_en and topic_en != topic:
+        topic_disp = "%s → %s" % (topic, topic_en)  # 中文检索词 → 翻译英文
+    else:
+        topic_disp = topic
     ws.write_rich_string(1, 0,
                          fmts["sub"], t("scope.topic") + "：",
-                         fmts["body"], (topic or t("col.unknown"))[:60],
+                         fmts["body"], (topic_disp or t("col.unknown"))[:60],
                          fmts["note"], "   " + datetime.now().strftime("%Y-%m-%d %H:%M"))
     ws.set_row(1, 20)
 
@@ -287,7 +292,7 @@ def build_readme(wb, data, fmts):
     kw = meta.get("keywords")
     kw_str = kw if isinstance(kw, str) else (", ".join(str(x) for x in kw) if kw else "—")
     scope = [
-        (t("scope.topic"), topic or t("col.unknown")),
+        (t("scope.topic"), topic_disp or t("col.unknown")),
         (t("scope.filter"), rt),
         (t("scope.source"), src),
         (t("scope.year"), yr_range),

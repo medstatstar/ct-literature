@@ -37,6 +37,7 @@ import screen_prisma
 import format_citations
 import obsidian_exporter
 import zotero_exporter
+import topic_translator  # 检索词 中文→英文 离线词典翻译
 from adapters import verify_citations  # P0: citation identifier verification (anti-hallucination)
 import evidence_log      # P0: provenance audit trail (ct-base §17.1)
 from adapters import fetch_prospero    # P1: PROSPERO systematic-review registry (key-gated, opt-in)
@@ -141,6 +142,19 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     # exporters (HTML banner / XLSX scope / meta JSON) see the same shape
     if isinstance(keywords, str):
         keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+    # Chinese topic → English via bundled offline dictionary (term_map + drug_name_map).
+    # The translated query goes to the APIs; the ORIGINAL topic is preserved for meta /
+    # reports / evidence log so the user's wording stays reproducible.
+    _topic_zh = topic
+    _tp = topic_translator.translate_topic(topic)
+    if _tp["translated"]:
+        topic = _tp["topic_en"]
+        if _tp["untranslated"]:
+            _out("[i18n] " + i18n.t("topic.partial", rest="、".join(_tp["untranslated"])),
+                 "topic_translated", zh=_topic_zh, en=topic, partial=True)
+        else:
+            _out("[i18n] " + i18n.t("topic.translated", en=topic),
+                 "topic_translated", zh=_topic_zh, en=topic, partial=False)
     http_utils.notify_openalex_key_if_missing(openalex_key)
     oa_json = os.path.join(out_dir, "openalex.json")
     epmc_json = os.path.join(out_dir, "europepmc.json")
@@ -383,7 +397,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                                 verified version).
         Returns the primary deliverable path.
         """
-        meta = {"topic": topic, "review_type": review_type,
+        meta = {"topic": _topic_zh, "review_type": review_type,
                 "year_from": year_from, "year_to": year_to, "safety": safety,
                 "citation_style": citation_style if export_bib else None,
                 "rank": rank, "keywords": keywords,
@@ -391,6 +405,11 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 "verification": vsum,
                 "with_prospero": with_prospero,
                 "source_notes": source_notes}
+        if _tp["translated"]:  # 中文→英文翻译信息（供报告展示与溯源）
+            meta["topic_en"] = _tp["topic_en"]
+            meta["topic_translated"] = True
+            meta["topic_hits"] = _tp["hits"]
+            meta["topic_untranslated"] = _tp["untranslated"]
         oa_status = http_utils.get_openalex_key_status()
         config = {
             "openalex_key": oa_status,

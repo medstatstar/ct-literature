@@ -71,6 +71,14 @@
     "en": "unverified preview now, verification backfills",
     "zh": "先出未验证预览，验证结果后台回填"
   },
+  "topic.translated": {
+    "en": "Translated Chinese topic → English: {en}",
+    "zh": "已将中文检索词翻译为英文：{en}"
+  },
+  "topic.partial": {
+    "en": "Some Chinese terms were not mapped: {rest} — for best recall, use English terms.",
+    "zh": "部分中文术语未识别：{rest} —— 为获得最佳召回，建议改用英文检索词。"
+  },
   "exec.running": {
     "en": "[EXECUTING R CODE...]",
     "zh": "[正在执行 R 代码...]"

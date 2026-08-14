@@ -188,5 +188,12 @@
   "艾滋病": "HIV",
   "新冠": "COVID-19",
   "感染": "infection",
-  "疫苗": "vaccine"
+  "疫苗": "vaccine",
+  "间质性肺病": "interstitial lung disease (ILD)",
+  "间质性肺疾病": "interstitial lung disease (ILD)",
+  "不良反应": "adverse events",
+  "不良事件": "adverse events",
+  "总体生存": "overall survival (OS)",
+  "无进展生存": "progression-free survival (PFS)",
+  "客观缓解率": "objective response rate (ORR)"
 }

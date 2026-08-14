@@ -183,6 +183,11 @@ def render(data, lang):
     # from the report itself, not just the evidence log.
     meta = data.get("meta") or {}
     _topic = meta.get("topic") or ""
+    _topic_en = meta.get("topic_en") or ""
+    if _topic_en and _topic_en != _topic:
+        _topic_disp = "%s → %s" % (_topic, _topic_en)  # 中文检索词 → 翻译英文
+    else:
+        _topic_disp = _topic
     _kw = meta.get("keywords")
     if isinstance(_kw, str):
         _kw_str = _kw  # 兼容字符串直传（standalone 调用方）
@@ -198,7 +203,7 @@ def render(data, lang):
     _filter_str = " · ".join(_filters) if _filters else ""
     search_chips = []
     if _topic:
-        search_chips.append(f'<span class="chip">{esc(L["search.topic"])}: <b>{esc(_topic)}</b></span>')
+        search_chips.append(f'<span class="chip">{esc(L["search.topic"])}: <b>{esc(_topic_disp)}</b></span>')
     if _kw_str:
         search_chips.append(f'<span class="chip">{esc(L["search.keywords"])}: <b>{esc(_kw_str)}</b></span>')
     if _filter_str:
