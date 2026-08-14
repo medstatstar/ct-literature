@@ -299,6 +299,8 @@ python scripts/ct_literature.py --topic "osimertinib" --run --no-consistency --o
 # run_start / source_done / source_failed / fetch_done / verify_progress / verify_done /
 # evidence_log / export_done / export_failed / run_done, one JSON object per line, flushed)
 python scripts/ct_literature.py --topic "osimertinib" --run --progress json --out-dir ./out
+# v0.6.14 · two-phase delivery: unverified report in seconds, verification backfills later
+python scripts/ct_literature.py --topic "osimertinib" --run --verify background --out-dir ./out
 
 # P1 · PROSPERO systematic-review registry (opt-in, reserved source — dormant until a token is set)
 python scripts/ct_literature.py --topic "osimertinib" \

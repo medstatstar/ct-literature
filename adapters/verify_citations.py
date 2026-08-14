@@ -79,24 +79,14 @@ def _resolve_doi(doi, timeout=15):
     # strip a trailing terminal punctuation a source may have appended to the DOI
     # (e.g. "10.1056/NEJMoa2403614.") so the resolution URL is clean.
     url = "https://doi.org/" + _strip_doi_tail(m.group(0))
-    req = urllib.request.Request(
-        url, method="GET",
-        headers={"User-Agent": http_utils.UA, "Range": "bytes=0-0"})
+    hdrs = {"User-Agent": http_utils.UA, "Range": "bytes=0-0"}
     try:
-        r = urllib.request.urlopen(req, timeout=timeout)
-        code = r.status
-        try:
-            r.close()
-        except Exception:
-            pass
-        # 2xx => resolved (200 OK or 206 Partial Content)
-        if 200 <= code < 300:
-            return "ok"
-        # Defensive: urllib raises HTTPError for 4xx/5xx, so we normally won't
-        # land here for those — but if a non-2xx response slips through:
-        if code == 403:
-            return "bot_blocked"
-        return "unresolved"
+        # pooled request: manual redirect following (doi.org 302 -> publisher),
+        # keep-alive connection reuse; 4xx/5xx raise HTTPError, network issues
+        # raise URLError — semantics identical to the old urllib.urlopen path.
+        http_utils._pooled_request(url, hdrs, timeout)
+        # 2xx (200 OK or 206 Partial Content) => resolved live resource
+        return "ok"
     except urllib.error.HTTPError as e:
         # urllib raises HTTPError for any 4xx/5xx final status (post-redirect).
         # A 403 from the publisher is bot-blocking; 404/410 mean the DOI is gone.

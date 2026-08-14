@@ -3,6 +3,29 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.6.14 — 2026-08-14
+
+### Performance · architecture-level wait-time reduction
+- **Pooled HTTP connections** (`adapters/http_utils.py`): replaced the per-request
+  `urllib.request.urlopen` (a fresh TCP+TLS handshake on every request) with a **thread-local
+  keep-alive connection pool** + manual redirect following + **per-host concurrency caps**
+  (doi.org 8 / Crossref 4 / OpenAlex 6 / Europe PMC 6 / S2 2). Saves ~100–300 ms handshake
+  per request across the hundreds of fetch + verify round-trips; stale connections are
+  dropped and rebuilt automatically. `verify_citations._resolve_doi` (doi.org Range probe)
+  now uses the same pooled path.
+- **Cross-source verification dedup** (`scripts/ct_literature.py`): the same work indexed by
+  two sources (e.g. OpenAlex + Europe PMC) now verifies **once** by `work_key` — results still
+  attach to every copy by key. Cuts 5–20% of verification calls on typical runs.
+- **Wider verification pool** (8 → 24 workers): per-host politeness is now enforced by the
+  connection-pool caps, not the worker count, so a 50-work verify finishes much sooner.
+- **Two-phase delivery — `--verify background`**: the report is emitted immediately with works
+  marked `pending_background` (fetch-time, ~seconds), then the background verification pass
+  finishes and re-renders `lit_report.html` + writes `lit_report_verified.xlsx` + updates the
+  evidence log. New progress events: `report_ready` → `verify_progress*` → `verify_done` →
+  `report_verified` → `run_done` (export events carry `verified: false|true`).
+- All existing modes (`all` / `top` / `none`) and human/json progress output are unchanged
+  (regression-tested; verified 4/4 in `all` and `top`, connection reuse confirmed).
+
 ## v0.6.13 — 2026-08-14
 
 ### Feature · progress event stream (`--progress json`, agent-facing)

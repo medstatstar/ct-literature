@@ -191,12 +191,16 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     _verify_q = queue.Queue()
     _verify_results = {}
     _verify_workers = []
-    # Source-aware streaming verification only runs in `all` mode. In `top` mode we verify
-    # after ranking (only the top-N); in `none` we skip verification entirely.
-    _should_stream = (verify_mode == "all" and jobs)
+    # Cross-source duplicates (the same work indexed by OpenAlex AND Europe PMC) share a
+    # work_key — verify once, attach to every copy by key (see attach_verifications).
+    _seen_keys = set()
+    # Source-aware streaming verification runs in `all` and `background` modes.
+    # In `top` mode we verify after ranking (only the top-N); in `none` we skip entirely.
+    _should_stream = (verify_mode in ("all", "background") and jobs)
     if _should_stream:
-        _out("[verify] mode=all (streaming; source-aware skip on same-source re-resolution)",
-             "verify_mode", mode="all")
+        _out("[verify] mode=%s (streaming; source-aware skip on same-source re-resolution)"
+             % verify_mode,
+             "verify_mode", mode=verify_mode)
         _verify_done = 0
         _verify_lock = threading.Lock()
 
@@ -227,7 +231,9 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 _out(None, "verify_progress", done=_done)
                 _verify_q.task_done()
 
-        _vw = min(8, max(1, len(jobs)))  # cap concurrency to avoid API throttling
+        _vw = min(24, max(1, len(jobs) * 4))  # widened pool; per-host politeness enforced
+        # by the connection-pool caps in http_utils (doi.org 8 / Crossref 4 / OpenAlex 6 /
+        # EPMC 6), not by the worker count — so a 50-work verify finishes much sooner.
         for _ in range(_vw):
             _t = threading.Thread(target=_verify_worker, daemon=True)
             _t.start()
@@ -264,7 +270,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                     # stream this source's works into the verification queue immediately
                     if _should_stream and _p is not None:
                         for _w in (_p.get("works") or []):
-                            _verify_q.put((_w, verify_citations.work_key(_w), _w.get("source")))
+                            _wk = verify_citations.work_key(_w)
+                            if _wk not in _seen_keys:  # cross-source duplicates: verify once
+                                _seen_keys.add(_wk)
+                                _verify_q.put((_w, _wk, _w.get("source")))
                 except Exception as _e:  # one source failing must not kill the pipeline
                     _note = _friendly_source_note(_name, _e)
                     _out(_note["banner"], "source_failed", source=_name,
@@ -282,11 +291,17 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     else:
         _out("[WARN] no sources enabled", "no_sources")
 
-    # drain the verification workers (they finish as the queue empties)
-    for _ in _verify_workers:
-        _verify_q.put(None)
-    for _t in _verify_workers:
-        _t.join()
+    # Drain the verification workers (they finish as the queue empties).
+    # Normal modes drain here; `background` mode defers the drain until AFTER the
+    # unverified fast preview is rendered (two-phase delivery).
+    def _drain_verifiers():
+        for _ in _verify_workers:
+            _verify_q.put(None)
+        for _t in _verify_workers:
+            _t.join()
+
+    if verify_mode != "background":
+        _drain_verifiers()
 
     works = normalize.merge(payloads)
 
@@ -341,7 +356,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
              % (verify_top_n, _skipped, json.dumps(vsum, ensure_ascii=False)),
              "verify_done", mode="top", top_n=verify_top_n,
              sampled=_skipped, summary=vsum)
-    else:  # verify_mode == "none"
+    elif verify_mode == "none":
         for _w in works:
             _w.setdefault("citation_verified", False)
             _w.setdefault("citation_verify_status", "no_identifier")
@@ -351,108 +366,148 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 "unverified_sampled": 0, "skipped_preview": True,
                 "mode": "none"}
         _out("[OK] citation verification skipped (mode=none)", "verify_done", mode="none")
+    else:  # verify_mode == "background" — handled by the two-phase block below
+        pass
 
-    # ---- build meta (shared by report / xlsx / html / evidence log) ----
-    meta = {"topic": topic, "review_type": review_type,
-            "year_from": year_from, "year_to": year_to, "safety": safety,
-            "citation_style": citation_style if export_bib else None,
-            "rank": rank, "keywords": keywords,
-            "prisma": prisma_block,
-            "verification": vsum,
-            "with_prospero": with_prospero,
-            "source_notes": source_notes}
+    # ---- build meta / evidence / exports (shared by all verify modes) ----
+    def _finalize(works, vsum, suffix=""):
+        """Render intermediate state + all exports for a given (works, vsum) pair.
 
-    # ---- run-time config audit block (records key status so the search never
-    #      silently takes the wrong / throttled path) ----
-    oa_status = http_utils.get_openalex_key_status()
-    config = {
-        "openalex_key": oa_status,
-        "openalex_key_url": http_utils.OPENALEX_SIGNUP_URL,
-        "semantic_scholar_key": "configured" if http_utils.load_s2_key() else "missing",
-        "prospero_token": "configured" if (with_prospero and prospero_token) else (
-            "missing" if with_prospero else "not_used"),
-    }
-    meta["config"] = config
+        suffix=""            -> normal deliverables (lit_report.xlsx / lit_report.html)
+        suffix="_verified"   -> verified refresh: lit_report_verified.xlsx + re-render
+                                lit_report.html (overwrites the preview with the
+                                verified version).
+        Returns the primary deliverable path.
+        """
+        meta = {"topic": topic, "review_type": review_type,
+                "year_from": year_from, "year_to": year_to, "safety": safety,
+                "citation_style": citation_style if export_bib else None,
+                "rank": rank, "keywords": keywords,
+                "prisma": prisma_block,
+                "verification": vsum,
+                "with_prospero": with_prospero,
+                "source_notes": source_notes}
+        oa_status = http_utils.get_openalex_key_status()
+        config = {
+            "openalex_key": oa_status,
+            "openalex_key_url": http_utils.OPENALEX_SIGNUP_URL,
+            "semantic_scholar_key": "configured" if http_utils.load_s2_key() else "missing",
+            "prospero_token": "configured" if (with_prospero and prospero_token) else (
+                "missing" if with_prospero else "not_used"),
+        }
+        meta["config"] = config
+        evidence = evidence_log.build_log(payloads, topic, meta, vsum, config=config,
+                                          degraded=source_notes)
+        ev_res = evidence_log.write_log(evidence, out_dir)
+        meta["evidence_log"] = evidence
+        _out("[OK] evidence_log -> %s / %s" % (ev_res["json"], ev_res["md"]),
+             "evidence_log", json_path=ev_res["json"], md_path=ev_res["md"])
+        if oa_status == "missing":
+            _out("[WARN] OpenAlex ran in keyless mode — re-run with a configured key for full coverage.",
+                 "warn", kind="keyless")
+        out_data = {"count": len(works), "works": works}
+        if prisma_block:
+            out_data["prisma"] = prisma_block
+        out_data["evidence_log"] = evidence
+        out_data["verification"] = vsum
+        with open(merged_json, "w", encoding="utf-8") as f:
+            json.dump(out_data, f, ensure_ascii=False, indent=2)
+        _out("[OK] intermediate state -> %s (hidden; reused by standalone tools)" % merged_json,
+             "intermediate", path=merged_json)
+        primary = None
+        _ver = {"verified": bool(suffix)}
+        if export_bib:
+            try:
+                fc = format_citations.export_citations(
+                    {"count": len(works), "works": works}, style=citation_style,
+                    out_dir=out_dir, lang="auto")
+                _out("[OK] citations(%s) -> %s / %s" % (
+                    citation_style, fc["bib_path"], fc["ris_path"]),
+                    "export_done", kind="citations",
+                    bib=fc["bib_path"], ris=fc["ris_path"], **_ver)
+            except Exception as _ce:
+                _out("[WARN] citation export failed: %s" % _ce,
+                     "export_failed", kind="citations", error=str(_ce), **_ver)
+        if make_xlsx:
+            xlsx_out = os.path.join(out_dir, "lit_report%s.xlsx" % suffix)
+            try:
+                export_xlsx.export_workbook(
+                    {"count": len(works), "works": works, "meta": meta},
+                    xlsx_out, lang=lang)
+                _out("[OK] xlsx  -> %s" % xlsx_out, "export_done", kind="xlsx",
+                     path=xlsx_out, **_ver)
+                primary = primary or xlsx_out
+            except Exception as _xe:
+                _out("[WARN] xlsx export failed: %s" % _xe,
+                     "export_failed", kind="xlsx", error=str(_xe), **_ver)
+        if make_html:
+            html_out = os.path.join(out_dir, "lit_report.html")
+            try:
+                html_text = export_html.render(out_data, lang)
+                with open(html_out, "w", encoding="utf-8") as f:
+                    f.write(html_text)
+                _out("[OK] html  -> %s" % html_out, "export_done", kind="html",
+                     path=html_out, **_ver)
+                primary = html_out
+            except Exception as _he:
+                _out("[WARN] html export failed: %s" % _he,
+                     "export_failed", kind="html", error=str(_he), **_ver)
+        if obsidian:
+            try:
+                ob = obsidian_exporter.export_obsidian(
+                    {"count": len(works), "works": works}, out_dir=out_dir, lang=lang)
+                _out("[OK] obsidian notes=%d -> %s" % (ob["count"], ob["folder"]),
+                     "export_done", kind="obsidian", count=ob["count"],
+                     folder=ob["folder"], **_ver)
+                _out("     moc -> %s" % ob["moc"], "export_done",
+                     kind="obsidian_moc", path=ob["moc"], **_ver)
+            except Exception as _oe:
+                _out("[WARN] obsidian export failed: %s" % _oe,
+                     "export_failed", kind="obsidian", error=str(_oe), **_ver)
+        if zotero:
+            try:
+                zo = zotero_exporter.export_zotero(
+                    {"count": len(works), "works": works}, out_dir=out_dir)
+                _out("[OK] zotero csv/ris -> %s / %s" % (zo["csv"], zo["ris"]),
+                     "export_done", kind="zotero", csv=zo["csv"], ris=zo["ris"], **_ver)
+            except Exception as _ze:
+                _out("[WARN] zotero export failed: %s" % _ze,
+                     "export_failed", kind="zotero", error=str(_ze), **_ver)
+        return primary
 
-    # ---- P0: provenance audit trail (evidence log) ----
-    evidence = evidence_log.build_log(payloads, topic, meta, vsum, config=config,
-                                        degraded=source_notes)
-    ev_res = evidence_log.write_log(evidence, out_dir)
-    meta["evidence_log"] = evidence
-    _out("[OK] evidence_log -> %s / %s" % (ev_res["json"], ev_res["md"]),
-         "evidence_log", json_path=ev_res["json"], md_path=ev_res["md"])
-    if oa_status == "missing":
-        _out("[WARN] OpenAlex ran in keyless mode — re-run with a configured key for full coverage.",
-             "warn", kind="keyless")
+    # Two-phase (background) verification: fast unverified preview first, then a
+    # verified refresh once the background verification workers finish. The user /
+    # agent gets a usable report at fetch-time (~seconds) instead of waiting for the
+    # full verification pass; verify_progress events keep streaming meanwhile.
+    if verify_mode == "background":
+        for _w in works:
+            _w.setdefault("citation_verified", False)
+            _w.setdefault("citation_verify_status", "pending_background")
+            _w.setdefault("citation_verify_note",
+                          "verification running in background (--verify background)")
+        vsum_bg = {"total": len(works), "pending": len(works),
+                   "skipped_preview": True, "mode": "background"}
+        _out("[OK] background verification: fast unverified preview (results attach later)",
+             "verify_mode", mode="background")
+        primary = _finalize(works, vsum_bg, suffix="")
+        _out("[OK] report ready (unverified preview): %s" % primary,
+             "report_ready", primary=primary or "")
+        _drain_verifiers()
+        verify_citations.attach_verifications(works, _verify_results)
+        vsum = verify_citations.summarize_results(_verify_results)
+        vsum["total"] = len(works)
+        vsum["mode"] = "background"
+        vsum["skipped_preview"] = False
+        _out("[OK] citation verification (background): %s"
+             % json.dumps(vsum, ensure_ascii=False),
+             "verify_done", mode="background", summary=vsum)
+        primary_v = _finalize(works, vsum, suffix="_verified")
+        _out("[OK] report verified -> %s" % primary_v,
+             "report_verified", primary=primary_v or "")
+        primary = primary_v or primary
+    else:
+        primary = _finalize(works, vsum, suffix="")
 
-    out_data = {"count": len(works), "works": works}
-    if prisma_block:
-        out_data["prisma"] = prisma_block
-    out_data["evidence_log"] = evidence
-    out_data["verification"] = vsum
-    with open(merged_json, "w", encoding="utf-8") as f:
-        json.dump(out_data, f, ensure_ascii=False, indent=2)
-    _out("[OK] intermediate state -> %s (hidden; reused by standalone tools)" % merged_json,
-         "intermediate", path=merged_json)
-    primary = None
-
-    # ---- P0-A: citation formatting + BibTeX/RIS export ----
-    if export_bib:
-        try:
-            fc = format_citations.export_citations(
-                {"count": len(works), "works": works}, style=citation_style,
-                out_dir=out_dir, lang="auto")
-            _out("[OK] citations(%s) -> %s / %s" % (
-                citation_style, fc["bib_path"], fc["ris_path"]),
-                "export_done", kind="citations",
-                bib=fc["bib_path"], ris=fc["ris_path"])
-        except Exception as _ce:
-            _out("[WARN] citation export failed: %s" % _ce,
-                 "export_failed", kind="citations", error=str(_ce))
-
-    if make_xlsx:
-        xlsx_out = os.path.join(out_dir, "lit_report.xlsx")
-        try:
-            export_xlsx.export_workbook(
-                {"count": len(works), "works": works, "meta": meta},
-                xlsx_out, lang=lang)
-            _out("[OK] xlsx  -> %s" % xlsx_out, "export_done", kind="xlsx", path=xlsx_out)
-            primary = primary or xlsx_out
-        except Exception as _xe:
-            _out("[WARN] xlsx export failed: %s" % _xe,
-                 "export_failed", kind="xlsx", error=str(_xe))
-    if make_html:
-        html_out = os.path.join(out_dir, "lit_report.html")
-        try:
-            html_text = export_html.render(out_data, lang)
-            with open(html_out, "w", encoding="utf-8") as f:
-                f.write(html_text)
-            _out("[OK] html  -> %s" % html_out, "export_done", kind="html", path=html_out)
-            primary = html_out
-        except Exception as _he:
-            _out("[WARN] html export failed: %s" % _he,
-                 "export_failed", kind="html", error=str(_he))
-
-    # ---- F: Obsidian / Zotero 文献管理软件集成 ----
-    if obsidian:
-        try:
-            ob = obsidian_exporter.export_obsidian(
-                {"count": len(works), "works": works}, out_dir=out_dir, lang=lang)
-            _out("[OK] obsidian notes=%d -> %s" % (ob["count"], ob["folder"]),
-                 "export_done", kind="obsidian", count=ob["count"], folder=ob["folder"])
-            _out("     moc -> %s" % ob["moc"], "export_done", kind="obsidian_moc", path=ob["moc"])
-        except Exception as _oe:
-            _out("[WARN] obsidian export failed: %s" % _oe,
-                 "export_failed", kind="obsidian", error=str(_oe))
-    if zotero:
-        try:
-            zo = zotero_exporter.export_zotero(
-                {"count": len(works), "works": works}, out_dir=out_dir)
-            _out("[OK] zotero csv/ris -> %s / %s" % (zo["csv"], zo["ris"]),
-                 "export_done", kind="zotero", csv=zo["csv"], ris=zo["ris"])
-        except Exception as _ze:
-            _out("[WARN] zotero export failed: %s" % _ze,
-                 "export_failed", kind="zotero", error=str(_ze))
     _out("[OK] run finished: %s" % primary, "run_done", primary=primary or "")
     return primary
 
@@ -519,10 +574,12 @@ def main():
     ap.add_argument("--keywords", default=None,
                     help="comma-separated extra keywords for relevance scoring")
     # ---- P0: citation verification scope ----
-    ap.add_argument("--verify", default="all", choices=["all", "top", "none"],
+    ap.add_argument("--verify", default="all", choices=["all", "top", "none", "background"],
                     help="citation verification scope (anti-hallucination, ct-base §17.1): "
                          "all = verify every work (default); top = verify only the top-N by "
-                         "rank (fastest, good for large result sets); none = skip verification. "
+                         "rank (fastest, good for large result sets); none = skip verification; "
+                         "background = two-phase: emit an unverified report immediately, then "
+                         "re-render with verification results when the background pass finishes. "
                          "All modes apply source-aware skip (no redundant same-source re-resolution).")
     ap.add_argument("--verify-top-n", type=int, default=15,
                     help="N for --verify top (default 15): number of top-ranked works to verify")

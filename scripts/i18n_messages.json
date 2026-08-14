@@ -51,6 +51,10 @@
     "en": "~1 min",
     "zh": "1 分钟左右"
   },
+  "run.est.background": {
+    "en": "report in seconds, full verification ~1–4 min later",
+    "zh": "报告数秒即出，全量验证约 1–4 分钟后回补"
+  },
   "run.vmode.all": {
     "en": "full citation verification on",
     "zh": "已开启全量引文验证"
@@ -62,6 +66,10 @@
   "run.vmode.none": {
     "en": "citation verification skipped",
     "zh": "已跳过引文验证"
+  },
+  "run.vmode.background": {
+    "en": "unverified preview now, verification backfills",
+    "zh": "先出未验证预览，验证结果后台回填"
   },
   "exec.running": {
     "en": "[EXECUTING R CODE...]",

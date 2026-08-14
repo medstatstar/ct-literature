@@ -18,14 +18,101 @@ build_openalex_headers() to construct those headers uniformly.
 Zero confidential data or information input; reads only public literature.
 """
 import base64
+import http.client
+import io
 import json
 import os
+import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 UA = "ct-literature/0.3.3"
+
+# ── Pooled connections (per-thread keep-alive + per-host concurrency cap) ─────
+# urllib.request.urlopen opens a fresh TCP+TLS connection per request. During
+# citation verification (~2 HTTP round-trips per work) that means hundreds of
+# handshakes. We keep one HTTPS connection per thread per host (thread-local) and
+# reuse it across requests; a per-host semaphore caps concurrent in-flight requests
+# so the politeness / anti-throttle posture is preserved — the cap is the *rate
+# limit*, independent of the caller's worker-pool size.
+_POOL_LOCAL = threading.local()
+_POOL_HOST_SEMS = {}
+_POOL_HOST_SEMS_LOCK = threading.Lock()
+# Per-host concurrency caps (polite pools). Unknown hosts fall back to 4.
+_POOL_HOST_MAX = {
+    "doi.org": 8,
+    "api.crossref.org": 4,
+    "api.openalex.org": 6,
+    "ebi.ac.uk": 6,
+    "api.semanticscholar.org": 2,
+    "export.arxiv.org": 2,
+}
+
+
+def _pool_sem(host):
+    with _POOL_HOST_SEMS_LOCK:
+        sem = _POOL_HOST_SEMS.get(host)
+        if sem is None:
+            sem = threading.Semaphore(_POOL_HOST_MAX.get(host, 4))
+            _POOL_HOST_SEMS[host] = sem
+        return sem
+
+
+def _pool_conn(host, timeout):
+    key = "conn_" + host
+    conn = getattr(_POOL_LOCAL, key, None)
+    if conn is None:
+        conn = http.client.HTTPSConnection(host, timeout=timeout)
+        setattr(_POOL_LOCAL, key, conn)
+    return conn
+
+
+def _pooled_request(url, headers, timeout, max_redirects=5):
+    """GET with pooled keep-alive connections + manual redirect following.
+
+    Mirrors urllib.request.urlopen semantics (redirects, HTTPError) so the retry
+    loop in _request_with_retry stays unchanged. One connection per thread per host
+    is reused; a stale/failed connection is dropped and rebuilt. The per-host
+    semaphore caps concurrent in-flight requests (politeness / anti-throttle).
+    """
+    target = url
+    for _ in range(max_redirects + 1):
+        parts = urllib.parse.urlsplit(target)
+        host = parts.netloc
+        path = parts.path or "/"
+        if parts.query:
+            path += "?" + parts.query
+        conn = None
+        try:
+            with _pool_sem(host):
+                conn = _pool_conn(host, timeout)
+                conn.request("GET", path, headers=headers)
+                resp = conn.getresponse()
+                body = resp.read()
+            if resp.status in (301, 302, 303, 307, 308) and resp.getheader("Location"):
+                target = urllib.parse.urljoin(target, resp.getheader("Location"))
+                continue
+            if resp.status >= 400:
+                raise urllib.error.HTTPError(
+                    target, resp.status, "HTTP %s" % resp.status,
+                    resp.getheaders(), io.BytesIO(body))
+            return body
+        except urllib.error.HTTPError:
+            raise
+        except (http.client.HTTPException, OSError, ValueError) as e:
+            # stale/failed connection (server closed keep-alive, TLS reset, ...):
+            # drop it so the next request rebuilds a fresh one.
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                setattr(_POOL_LOCAL, "conn_" + host, None)
+            raise urllib.error.URLError(reason=e)
+    raise urllib.error.HTTPError(url, 302, "too many redirects", [], None)
 
 # ── Lightweight .env key obfuscation (XOR+base64) ──────────────────────────────
 # If the .env (holding the user's PRIVATE OpenAlex/S2 key) is ever accidentally
@@ -121,9 +208,7 @@ def _request_with_retry(url, headers=None, timeout=45, max_retries=4, backoff=2.
     first_429 = False
     for attempt in range(1, max_retries + 1):
         try:
-            req = urllib.request.Request(url, headers=hdrs)
-            r = urllib.request.urlopen(req, timeout=timeout)
-            return r.read()
+            return _pooled_request(url, hdrs, timeout)
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 rl_seen += 1

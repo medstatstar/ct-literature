@@ -299,6 +299,8 @@ python scripts/ct_literature.py --topic "osimertinib" --run --no-consistency --o
 # fetch_done / verify_progress / verify_done / evidence_log / export_done / export_failed /
 # run_done，每行一个 JSON 对象、实时 flush）
 python scripts/ct_literature.py --topic "osimertinib" --run --progress json --out-dir ./out
+# v0.6.14 · 两阶段交付：报告数秒即出（未验证版），验证结果后台回填后自动重渲染
+python scripts/ct_literature.py --topic "osimertinib" --run --verify background --out-dir ./out
 
 # P1 · PROSPERO 系统评价注册库（可选，保留接口，未提供 token 前自动空跳过）
 python scripts/ct_literature.py --topic "osimertinib" \
