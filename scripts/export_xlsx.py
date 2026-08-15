@@ -340,18 +340,25 @@ def build_readme(wb, data, fmts):
     return ws
 
 
+# Shared works-table column definition — used by BOTH the Works sheet and the
+# Safety-Related sheet so headers, widths (incl. the OA column) and autofilter
+# never drift apart (2026-08-15: Safety sheet was missing autofilter and the
+# OA column width, causing header-wrap).
+_WORKS_COLS = [("source", t("col.source"), 14),
+               ("year", t("col.year"), 8),
+               ("title", t("col.title"), 52),
+               ("authors", t("col.authors"), 34),
+               ("publication", t("col.publication"), 26),
+               ("type", t("col.type"), 14),
+               ("study_type", t("col.study_type"), 20),
+               ("cited_by_count", t("col.cited"), 10),
+               ("is_safety", t("col.is_safety"), 10),
+               ("url", t("col.url"), 22),
+               ("open_access_url", t("col.oa"), 28)]
+
+
 def _write_works_table(ws, works, fmts, safety_hl, start_row=0):
-    cols = [("source", t("col.source"), 14),
-            ("year", t("col.year"), 8),
-            ("title", t("col.title"), 52),
-            ("authors", t("col.authors"), 34),
-            ("publication", t("col.publication"), 26),
-            ("type", t("col.type"), 14),
-            ("study_type", t("col.study_type"), 20),
-            ("cited_by_count", t("col.cited"), 10),
-            ("is_safety", t("col.is_safety"), 10),
-            ("url", t("col.url"), 22),
-            ("open_access_url", t("col.oa"), 28)]
+    cols = _WORKS_COLS
     ws.set_row(start_row, HEADER_H)
     for ci, (_, h, _) in enumerate(cols):
         ws.write(start_row, ci, h, fmts["header"])
@@ -397,13 +404,8 @@ def build_works(wb, data, fmts, safety_hl):
     n = _write_works_table(ws, works, fmts, safety_hl)
     ws.freeze_panes(1, 0)
     if works:
-        ws.autofilter(0, 0, n, 11)
-    for ci, (_, _, w) in enumerate([("source", "", 14), ("year", "", 8),
-                                    ("title", "", 52), ("authors", "", 34),
-                                    ("publication", "", 26), ("type", "", 14),
-                                    ("study_type", "", 20), ("cited", "", 10),
-                                    ("safety", "", 10), ("url", "", 22),
-                                    ("open_access_url", "", 28)]):
+        ws.autofilter(0, 0, n, len(_WORKS_COLS) - 1)
+    for ci, (_, _, w) in enumerate(_WORKS_COLS):
         ws.set_column(ci, ci, w)
     return ws
 
@@ -532,7 +534,10 @@ def build_safety(wb, data, fmts, safety_hl):
     works = [w for w in (data.get("works") or []) if w.get("is_safety")]
     n = _write_works_table(ws, works, fmts, safety_hl)
     ws.freeze_panes(1, 0)
-    for ci, w in enumerate([14, 8, 52, 34, 26, 14, 20, 10, 10, 22]):
+    # same header filter + column widths as the Works sheet (incl. OA col 28)
+    if works:
+        ws.autofilter(0, 0, n, len(_WORKS_COLS) - 1)
+    for ci, (_, _, w) in enumerate(_WORKS_COLS):
         ws.set_column(ci, ci, w)
     return ws
 
