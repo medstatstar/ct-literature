@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-abstract_translator.py — 英文摘要自动翻译（英文→中文）
+abstract_translator.py — 英文摘要术语标注（英文→中文，术语级）
 
-基于本地医学专业术语词典 + 可选翻译 API 实现摘要翻译。
-默认纯本地词典翻译（零联网），API 为 opt-in。
+基于本地医学专业术语词典（内置 EN→ZH 词表 + references/term_map.json 的英文条目），
+对命中术语做中文标注（替换为【中文】），未命中词保留原文。
+纯本地、零联网——**无外部翻译 API**；非全文翻译。
 
 Usage:
   python scripts/abstract_translator.py --text "This study evaluated..." --format json
@@ -188,30 +189,44 @@ def load_term_map() -> Dict:
 
 
 def translate_abstract(text: str, term_map: Dict) -> Dict:
-    """翻译摘要。
-    
-    策略：
-    1. 先进行术语替换（最长匹配优先）
-    2. 对未匹配的词保留原文
-    3. 输出双语对照格式
+    """对英文文本做医学术语中文标注（术语级，非全文翻译）。
+
+    修复（2026-08-15）：
+    1. 只取**英文 key**——term_map.json 混入的中→英条目（中文 key）对英→中标注无效，
+       且会干扰匹配（此前实测 "osimertinib" 被短词 "os" 子串误伤、循环替换导致嵌套）。
+    2. **词边界匹配**（前后非字母数字）——"os" 不再命中 "osimertinib" 内部。
+    3. **单轮交替替换**（最长匹配优先）——已替换区间不再被二次匹配，杜绝嵌套。
     """
-    # 按术语长度降序排序（最长匹配优先）
-    sorted_terms = sorted(term_map.keys(), key=len, reverse=True)
-    
-    translated = text
+    import re as _re
+    _han = _re.compile(r"[\u4e00-\u9fff]")
+    # 只保留英文 key（去掉中文 key / 纯符号 key）
+    terms = {k: v for k, v in term_map.items()
+             if isinstance(k, str) and isinstance(v, str) and not _han.search(k) and _re.search(r"[A-Za-z]", k)}
+    if not terms:
+        return {"original": text, "translated": text, "replacements": [],
+                "n_replacements": 0}
+    # 大小写归一索引（IGNORECASE 匹配后按原文大小写回查）
+    lower2zh = {k.lower(): v for k, v in terms.items()}
+    sorted_keys = sorted(terms, key=len, reverse=True)  # 最长匹配优先
+
     replacements = []
-    
-    for term in sorted_terms:
-        pattern = re.compile(re.escape(term), re.IGNORECASE)
-        matches = pattern.findall(translated)
-        if matches:
-            replacements.append({
-                "en": term,
-                "zh": term_map[term],
-                "count": len(matches),
-            })
-            translated = pattern.sub(f"【{term_map[term]}】", translated)
-    
+    counts = {}
+
+    def _repl(m):
+        en = m.group(0)
+        zh = lower2zh.get(en.lower(), terms.get(en))
+        counts[en] = counts.get(en, 0) + 1
+        return "【%s】" % zh
+
+    # 词边界 + 单轮交替（各分支按长度降序，re 从左到右尝试）
+    pattern = _re.compile(
+        r"(?<![A-Za-z0-9])(" + "|".join(_re.escape(k) for k in sorted_keys) + r")(?![A-Za-z0-9])",
+        _re.IGNORECASE)
+    translated = pattern.sub(_repl, text)
+    for en, n in counts.items():
+        replacements.append({"en": en, "zh": lower2zh.get(en.lower(), terms.get(en)),
+                             "count": n})
+
     return {
         "original": text,
         "translated": translated,
@@ -245,7 +260,7 @@ def format_ascii(result: Dict) -> str:
 
 
 def main():
-    p = argparse.ArgumentParser(description="Auto-translate English abstracts")
+    p = argparse.ArgumentParser(description="Annotate English text with Chinese medical-term glosses (offline, term-level; not full-text translation)")
     p.add_argument("--text", type=str, default=None, help="input text")
     p.add_argument("--file", type=str, default=None,
                    help="input file path (reads only this local file you specify; no other file access)")

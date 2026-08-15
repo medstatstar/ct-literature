@@ -3,6 +3,14 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.7.1 — 2026-08-15
+
+### Fix + Docs · make the abstract term-annotation tool actually work, and describe it honestly
+- **Fix `abstract_translator.translate_abstract`** (was producing garbage): the old loop replaced each term without word boundaries, so short keys like `os`/`evaluate` corrupted inside longer words (`osimertinib` → `【总生存期】imertinib`), and sequential per-term substitution re-matched inside already-replaced spans (nested 【【…】】). Now: (1) only English keys are used (the Chinese-key entries from `term_map.json` are ignored — they belong to the zh→en topic translator, not this EN→ZH annotator); (2) word-boundary matching `(?<![A-Za-z0-9])…(?![A-Za-z0-9])`; (3) single-pass alternation, longest-first — no nesting. Verified: `randomized controlled trial → 【随机对照试验】`, `NSCLC → 【非小细胞肺癌】`, `overall survival → 【总生存期】`, `osimertinib` untouched.
+- `SKILL.md` summary/description: "本地英文→中文摘要翻译助手" → **"可选英文→中文摘要术语标注工具（本地、术语级替换，非全文翻译）"** — the helper is a term-level annotator and not part of the retrieval pipeline; the old wording set a full-translation expectation it cannot meet.
+- `README.md` / `README_zh-CN.md` (Advanced Reference): new "Optional tool · English→Chinese abstract term-annotation" section with CLI usage, real verified examples, and the explicit boundary: **term-level substitution, not full-text translation**.
+- `scripts/abstract_translator.py`: docstring & CLI help aligned — removed the stale "optional translation API" claim (the code has **no API path**; purely local dictionary substitution).
+
 ## v0.7.0 — 2026-08-14
 
 > v0.6.13（进度事件流）与 v0.6.14（架构优化）开发版均未单独发布，功能统一并入 v0.7.0。

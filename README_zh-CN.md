@@ -241,6 +241,21 @@ CLI 助手、运行要求、架构树与统一工作模式 schema 已移到此�
 | Key（可选） | OpenAlex 免费 key（规模化推荐）；Semantic Scholar key 可选（放宽 ~1 req/s 限制）。均经 `.env` / 环境变量 / `--openalex-key`。 |
 | 兄弟技能 | `ct-registry`（试验注册）、`ct-safety`（FAERS）、`ct-pipeline`（情报简报）—— ct-literature 既供给主题也被供给；均从 GitHub 安装。 |
 
+### 可选工具 · 英文→中文摘要术语标注（`abstract_translator.py`）
+
+一个独立的轻量 CLI：对英文文本命中词典的医学术语做**中文标注**（`术语级替换`，非全文翻译——未命中词保留英文）。它**不属于检索流水线**，按需对文本或文件运行：
+
+```bash
+# 标注一段文本
+python scripts/abstract_translator.py --text "Osimertinib is a third-generation EGFR-TKI used in NSCLC."
+# 标注文件（如摘要），输出 ASCII 或 JSON
+python scripts/abstract_translator.py --file abstract.txt --format ascii
+python scripts/abstract_translator.py --file abstract.txt --format json --output out.json
+```
+
+输出展示原文与标注版（如 `randomized controlled trial` → 【随机对照试验】、`NSCLC` → 【非小细胞肺癌】、`overall survival` → 【总生存期】）。词典为内置离线英→中医学术语表（约 130 条：研究类型 / 试验设计 / 统计术语）+ 共享 `term_map.json` 的英文条目，无网络调用。需要通顺整句翻译时，请改用通用翻译服务。
+
+
 ### 架构
 ```
 ct-literature/

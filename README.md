@@ -241,6 +241,19 @@ CLI helpers, runtime requirements, the architecture tree, and the unified work-m
 | Keys (optional) | OpenAlex free key (recommended for scale); Semantic Scholar key optional (lifts ~1 req/s limit). Both via `.env` / env var / `--openalex-key`. |
 | Sibling skills | `ct-registry` (trial registries), `ct-safety` (FAERS), `ct-pipeline` (intel brief) — ct-literature seeds topics and is seeded by them; all install from GitHub. |
 
+### Optional tool · English→Chinese abstract term-annotation (`abstract_translator.py`)
+A small standalone CLI that annotates English text with Chinese glosses for matched medical terms — **term-level substitution, not full-text translation** (unmatched words stay in English). It is **not** part of the retrieval pipeline; run it on demand on a text or file:
+
+```bash
+# annotate a text snippet
+python scripts/abstract_translator.py --text "Osimertinib is a third-generation EGFR-TKI used in NSCLC."
+# annotate a file (e.g. an abstract), output ASCII or JSON
+python scripts/abstract_translator.py --file abstract.txt --format ascii
+python scripts/abstract_translator.py --file abstract.txt --format json --output out.json
+```
+
+Output shows the original and the annotated version (e.g. `randomized controlled trial` → 【随机对照试验】, `NSCLC` → 【非小细胞肺癌】, `overall survival` → 【总生存期】). The dictionary is a bundled offline EN→ZH medical-terms list (~130 entries, study types / trial-design / statistics) plus English entries from the shared `term_map.json`; no network call. For fluent full-sentence translation, use a general translation service instead.
+
 ### Architecture
 ```
 ct-literature/
