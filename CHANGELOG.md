@@ -3,6 +3,123 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.7.6 (2026-08-22) · Bug Report 客户端与规则对齐（ct-base §20.3 同步）+ 发布前 §16 整改
+
+- **`adapters/bug_report.py` 副本**：补齐 `confirm_thanks`/`build_followup`/`parse_history` + `_MSGS` thank/done/pending 双语文案 + `send_to_endpoint` 透传 `history`（此前缺这些函数）；docstring「三阶段确认」→「两阶段确认」。
+- **SKILL.md Bug Reporting 节**：Trigger 补「主动触发」独立路径（用户显式说 report a bug / 反馈问题直接走两阶段，不受每会话 1 次限制）；新增 Post-send history回执 bullet（endpoint 返回 `history`，回复由 `confirm_thanks(locale)` + `build_followup(history, locale)` 双语拼接：空→结束；`resultstr=="done"`→展示 memo；否则"未修复"）。
+- **发布前 §16 整改（ct-base 规范）**：
+  - `.gitignore` / `.clawhubignore` 补齐发布排除：`tests/`、`.env`、`__pycache__/`、`*.pyc`、`*.pyo`、`*.db`、`out/`、`*.log`、`.Rhistory`、`.RData`、`staging/`、`references/user_terms.json`、`adapters/coze/`（此前仅 guideline 排除，`tests/` 与 `.env` 会随发布包公开；与 README「仅 `.env.example` 随包发布」承诺对齐）。
+  - **版本对齐（§9）**：SKILL.md `version` 0.7.5 → 0.7.6；两份 README 的 Version 引用 v0.6.11 → v0.7.6（修复三处版本不一致）。
+  - **SKILL.md 压缩至 195 行**（§16.1 ≤200 行上限，原 278 行）：压缩 Language / Positioning / Data Sources / guidelines 段 / Features 表 / Implementation / Bug Reporting 长段，关键安全契约（SAFE PREVIEW、B 档、qualitative 警告、verify 反幻觉、guideline pointer-only、bug report 两阶段/11-key 白名单/端点/client-only）全部保留；细节仍指向 `references/`。
+  - **README 弱化「chat 让助手写 key 进 .env」表述**：自配置路径 (a)–(c) 提前为主推荐，chat 写入降级为可选（回应 ClawHub 审计 UNVERIFIED「Context-Inappropriate Capability」项）。
+  - **i18n 一致性确认**：`shared_sync_check` 提示的 6 个未携带 key（`auth.coze_outbound` 等）经 grep 验证 scripts/adapters 零引用，属纯 Python 裁剪，豁免。
+  - **发布树修正（方案 A 硬化测试暴露）**：`tests/` 的 7 个文件此前已进入 git 索引（历史 `.gitignore` 仅排除运行产物、从未排除 `tests/` 目录），**ignore 规则对已跟踪文件无效**，导致 `git archive HEAD` 发布包仍含 tests/。`git rm -r --cached tests/` 解除跟踪（工作区文件保留）并本地 commit `chore(§16.8)`；源仓库 `git ls-files` 现为 59 文件，`publish_secret_scan` P0=0 / P1=0。
+
+## v0.7.5 — 2026-08-16
+
+### Change · data-protection split (pointer-only skill tree; full text → author's Coze KB)
+
+- **Design decision (per user's data-protection concern):** the shareable skill is a copyable artifact, so
+  full-text guideline documents must NOT live inside it. The skill tree now ships **pointer-only**
+  (`references/guidelines/guidelines_index.json`: org / title / URL / version metadata — low-sensitivity,
+  publish-safe). **Full text is the author's curated IP and lives in the author's self-controlled Coze KB**
+  (not publicly copied with the skill). ct-advisor consults that Coze KB for native guideline Q&A and delegates
+  structured retrieval to this skill.
+- **`build_guidelines.build()` now defaults `download=False`.** When `--download` IS used, OA full texts are
+  written to a **LOCAL CACHE OUTSIDE the skill** (`~/.workbuddy/ct-guideline-docs`, default) — never under
+  `references/guidelines/`. A startup `[WARN]` reminds the author that docs are not part of the skill and must
+  not be published. New CLI flags: `--download` (opt-in), `--doc-cache-dir`.
+- **Defense-in-depth:** added `.clawhubignore` + `.gitignore` excluding any `references/guidelines/**`
+  PDF/XML/HTML and `ct-guideline-docs/` (in case `--doc-cache-dir` is ever pointed inside the skill tree).
+- **Docs:** SKILL.md G-section + summary/description/Features updated to state the pointer-only / Coze-home
+  split; version 0.7.4 → 0.7.5. A Coze-KB draft (`guideline_coze_kb_draft.md`, workspace root, OUTSIDE the
+  skill) enumerates the 4 seeded topics' orgs + canonical URLs with `key_recommendations` placeholders for the
+  author to fill from official sources before deploying to Coze.
+- **Verified:** `adapters/_smoke_guidelines.py` ALL PASS (external-cache download path + warning included).
+
+## v0.7.4 — 2026-08-16
+
+### Feature · build-time lightweight fetch for the 6 portal-only orgs (user-chosen "构建期轻量抓取")
+
+- **New `adapters/portal_fetch.py`** (BUILD-TIME only, called by `build_guidelines.build(run=True)`):
+  lightweight fetchers for the six portal-only orgs that have no free keyword API.
+  - **CPIC** — genuine fetch via its free, keyless PostgREST API (`api.cpicpgx.org/v1/guideline`,
+    falling back to `/publication`); stored as real `api` records (`retrieved:true`).
+  - **NCCN / ADA / AHA / SIGN / CMA** — best-effort public-portal HTML link-scrape. Schema-tolerant;
+    on login-wall (NCCN) / JS-render / network block it returns `[]` and `build_guidelines` falls back
+    to the honest `portal` pointer. **Nothing is fabricated.**
+  - Every fetcher is wrapped so it **never raises** — a failed fetch degrades gracefully to a pointer.
+- **Wired into the builder:** `build_guidelines.build()` step 2 now tries `portal_fetch.fetch_portal(org, …)`
+  per portal org; fetched records become `api` entries, failures fall back to `_portal_pointers()`.
+  `source_status` now reports each portal org as `fetched` or `pointer`. Analysis-time loading is unchanged
+  (still zero network via `guideline_corpus.load()`).
+- **Honest limitation:** only CPIC has a real free API; the other five are fragile HTML scrapes that will
+  likely stay pointers until tuned on open internet. NCCN is login-walled (free account) so may never yield
+  content without auth. No live verification in this sandbox (egress limited) — verified offline via mocks.
+- **Offline-verified:** 11 new smoke checks cover CPIC API path, HTML extraction, graceful `[]` on network
+  error, and the build-time "fetch→api / fail→pointer" wiring. Full smoke (`adapters/_smoke_guidelines.py`)
+  ALL PASS.
+
+## v0.7.3 — 2026-08-16
+
+### Refactor · clinical guideline corpus → local-first (corrects the v0.7.2 live-fetch design)
+- **Design correction (per user feedback):** clinical guidelines are a *versioned* reference standard
+  (NCCN 2024.v3, ADA 2026 Standards). The v0.7.2 model fetched "latest" via code at analysis time; the
+  correct model is a **curated, version-pinned LOCAL corpus** — build once, read many times (zero network
+  at analysis, reproducible, honours ct-base local-first / 数据不出域).
+- **New `adapters/guideline_corpus.py`** (analysis-time, ZERO network): reads
+  `references/guidelines/guidelines_index.json` and returns the same payload shape as
+  `fetch_guidelines.fetch()`, so `scripts/ct_literature.py` consumes it uniformly. Filters by topic/org;
+  returns an honest `corpus_missing` payload (with the builder command) when the index is absent.
+- **New `adapters/build_guidelines.py`** (build-time, network, author action): aggregates 12+ sources,
+  downloads OpenAlex OA-PDFs where reachable, writes/merges `guidelines_index.json` (+ optional doc files).
+  SAFE PREVIEW: omit `--run` → dry-run, **no network, no write**. Dedupe by `(org, topic/title)`;
+  special-cases portal orgs (`org:topic:title`) to avoid cross-topic id collisions.
+- **Rewired pipeline:** `scripts/ct_literature.py` `--with-guidelines` now calls `guideline_corpus.load()`
+  (was `fetch_guidelines.fetch(run=True)`). `fetch_guidelines.py` is retained as the source-library used
+  by the builder, not by analysis-time loading.
+- **Seeded corpus built live (network):** `references/guidelines/guidelines_index.json` — 96 curated
+  entries (72 `api` + 24 `portal` pointers, all `retrieved:false`) across 4 topics (diabetes /
+  breast-cancer / heart-failure / community-acquired-pneumonia). 0 OA-PDF docs on disk in this sandbox
+  (external publisher domains unreachable here) — downloads succeed on the author's open-internet machine.
+- **Offline-verified:** loader reads the real corpus in ~0.012 s with **zero network calls**; 22-check
+  smoke (`adapters/_smoke_guidelines.py`) ALL PASS (loader zero-network, builder SAFE PREVIEW, dedupe,
+  portal honesty, source-library 13 sources).
+- `SKILL.md`: G section rewritten to the corpus-first model; frontmatter summary/description + Features
+  row + Implementation CLI updated. `version` 0.7.1 → 0.7.3 (frontmatter had lagged behind CHANGELOG).
+- **Red line honoured:** no publish/deploy (no git push / SkillHub / ClawHub / Coze deploy); local changes
+  + local verification only.
+
+## v0.7.2 — 2026-08-16
+
+### Feature · clinical guideline aggregation across 12+ sources (G-upgrade, opt-in)
+- New `adapters/fetch_guidelines.py`: aggregates clinical-practice guidelines from **12+**
+  authoritative sources into one normalized, de-duplicated list. Two access tiers, honestly
+  labelled per record via `access` (`api`/`portal`) + `retrieved`:
+  - **Live `api`**: OpenAlex (guideline-typed search), Europe PMC (guideline pub types),
+    GIN (Guidelines International Network), WHO IRIS — fetched via the shared `http_utils`
+    GET+retry (429 Retry-After, exponential backoff, Bearer key).
+  - **Live `api` (key-gated, best-effort)**: NICE¹ / MAGICapp / TRIP² — graceful `skipped_no_key`
+    when the env key is absent (never fakes a result).
+  - **`portal` pointer** (no free keyword API): NCCN / ADA / AHA / SIGN / CMA / CPIC — emit an
+    honest navigational pointer (`retrieved:false`) to the org portal, **not** a fabricated fetch.
+- Wired into `scripts/ct_literature.py` as a **separate** capability (kept OUT of
+  `normalize.merge` so it never pollutes citation verification / PRISMA): `--with-guidelines`
+  (BooleanOptionalAction, opt-in) → writes `guidelines.json` + a `guidelines` block in
+  `.merged.json` (`meta.guidelines.source_status` shows per-source coverage). Flags:
+  `--guideline-sources` (subset), `--guideline-max` (per-source cap, default 20).
+- SAFE PREVIEW preserved: no network unless `--run`; `fetch(run=False)` returns `None`. Every
+  live source is wrapped so a failure degrades to a `source_status` note, never aborting.
+- `SKILL.md`: new "Clinical guideline sources" section, Features row, Implementation CLI examples,
+  and frontmatter summary/description updated.
+- Offline smoke test (`adapters/_smoke_guidelines.py`, mock-injected): 22 checks — parse /
+  normalize / dedupe / merge, SAFE PREVIEW, portal honesty (`retrieved:false`), key-gated skip,
+  and full `run()` integration — all pass.
+
+¹ NICE public REST auth header is undocumented (like PROSPERO); degrades to skip until a working
+token is supplied. ² TRIP requires a commercial API key. Live-correctness of GIN/WHO/MAGICapp/
+NICE/TRIP parse paths is schema-tolerant but pending validation against a real 200 response.
+
 ## v0.7.1 — 2026-08-15
 
 ### Fix + Docs · make the abstract term-annotation tool actually work, and describe it honestly
