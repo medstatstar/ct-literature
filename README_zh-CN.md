@@ -225,10 +225,10 @@ ct-literature 是一个**对话式技能**：你只要把想查的内容告诉�
 - **可溯源、不编造**：报告中每条事实性断言都带来源标注（每篇文献的 `sources` 列表）或 `⚠️ 官方核实` 标记；绝不用流畅措辞填补证据空白。
 - 输出仅供参考；申报 / 决策前请对照官方原文核实。
 
-### 出站与隐私（仅公开检索）
-- **唯一出站路径 = 公开文献 API**：运行检索时，你的主题词与筛选条件会发往 **OpenAlex**（`api.openalex.org`）、**Europe PMC**（`ebi.ac.uk/europepmc`）、**Semantic Scholar**（`api.semanticscholar.org`）—— 仅你启用的源。引文验证（默认开启）期间，技能还会额外访问 **`doi.org`**（DOI 解析）与 **Crossref**（`api.crossref.org`，用于标题/作者一致性校验）。**无其他出站路径，也绝不发送任何保密 / 申办方数据**。
-- **密钥留在你本机**：若配置了 OpenAlex / S2 key，从你本地的 `ct-literature/.env` 读取，**绝不随包分发** —— `.env` 已被 `.gitignore`（GitHub）/ `.clawhubignore`（ClawHub）排除，SkillHub 窄白名单也不含它；随包发布的只有 `.env.example` 模板。重新安装后需你自己再次填入 key。
-- **key 必须由你自行申请——技能不代发、也不内置任何 key**：OpenAlex 免费 key 请自行到 <https://openalex.org/settings/api> 申请（约 30 秒）。请按 §7 自行配置（`.env` / 环境变量 / `--openalex-key`）。**提醒**：聊天消息可能被平台记录留存——如需最高隐秘性，请始终走 §7 自配置。切勿从他人 `.env` 复制 key，切勿把 `.env` 提交进仓库。（你也可以让助手代为把 key 写进 `ct-literature/.env`——key 仅本地存储、绝不回显或写日志，只经 HTTPS 发往官方 OpenAlex API。）
+### 出站与隐私
+- **文献检索（仅公开 API）**：主题词与筛选发往 **OpenAlex** / **Europe PMC** / **Semantic Scholar**（仅你启用的源），引文验证时额外访问 **doi.org** 与 **Crossref**；绝不发送保密 / 申办方数据。
+- **Bug 报告（可选，需你确认）**：`adapters/bug_report.py` 仅在**两阶段确认后**才向 `https://ct-bugreport.coze.site/run` 发送 **11 键脱敏信封**（skill / version / error_type / description 等，不含原始数据与受试者信息）；无法联网时回退为本地文件。
+- **密钥留在本机**：key 从本地 `ct-literature/.env` 读取，绝不随包分发（仅 `.env.example` 随包）。OpenAlex 免费 key 请自行到 <https://openalex.org/settings/api> 申请，并按 §7 自行配置（`.env` / 环境变量 / `--openalex-key`）；切勿把 `.env` 提交进仓库。（也可让助手代为写入 `.env`——仅本地存储、绝不回显或写日志。）
 
 ---
 

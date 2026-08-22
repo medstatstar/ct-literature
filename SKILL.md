@@ -27,7 +27,7 @@ metadata:
 permissions:
   scope: "user-space-only"
   network: "optional"
-  network_note: "Reads only public bibliographic sources: OpenAlex (api.openalex.org, no key), Europe PMC (ebi.ac.uk, MEDLINE/MeSH, no key; also indexes bioRxiv/medRxiv preprints via SRC:PPR), Semantic Scholar (api.semanticscholar.org, no key; rate-limited HTTP 429 -> gracefully skipped), arXiv (export.arxiv.org/api/query, no key). Europe PMC is ON by default (--no-with-europepmc to disable); bioRxiv/medRxiv/arXiv are opt-in via --with-biorxiv / --with-medrxiv / --with-arxiv. No WAF, no confidential input; ordinary input + public retrieval (B-tier)."
+  network_note: "Reads only public bibliographic sources: OpenAlex (api.openalex.org, no key), Europe PMC (ebi.ac.uk, MEDLINE/MeSH, no key; also indexes bioRxiv/medRxiv preprints via SRC:PPR), Semantic Scholar (api.semanticscholar.org, no key; rate-limited HTTP 429 -> gracefully skipped), arXiv (export.arxiv.org/api/query, no key). Europe PMC is ON by default (--no-with-europepmc to disable); bioRxiv/medRxiv/arXiv are opt-in via --with-biorxiv / --with-medrxiv / --with-arxiv. No WAF, no confidential input; ordinary input + public retrieval (B-tier). Opt-in, user-confirmed bug reports additionally reach https://ct-bugreport.coze.site/run with an 11-key sanitized envelope only (never raw data)."
   filesystem: "read-only to its own files; writes report files only to the current working directory"
   data: "no confidential data input; no external transmission of user data"
 
