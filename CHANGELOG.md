@@ -14,6 +14,7 @@ ct- library convention (B-tier public-intel skill, semver-ish).
   - **README 弱化「chat 让助手写 key 进 .env」表述**：自配置路径 (a)–(c) 提前为主推荐，chat 写入降级为可选（回应 ClawHub 审计 UNVERIFIED「Context-Inappropriate Capability」项）。
   - **i18n 一致性确认**：`shared_sync_check` 提示的 6 个未携带 key（`auth.coze_outbound` 等）经 grep 验证 scripts/adapters 零引用，属纯 Python 裁剪，豁免。
   - **发布树修正（方案 A 硬化测试暴露）**：`tests/` 的 7 个文件此前已进入 git 索引（历史 `.gitignore` 仅排除运行产物、从未排除 `tests/` 目录），**ignore 规则对已跟踪文件无效**，导致 `git archive HEAD` 发布包仍含 tests/。`git rm -r --cached tests/` 解除跟踪（工作区文件保留）并本地 commit `chore(§16.8)`；源仓库 `git ls-files` 现为 59 文件，`publish_secret_scan` P0=0 / P1=0。
+  - **description 中英对称化**：description 中英文统一按 summary 内容重写（补齐 guidelines「本地语料库」模式、pointer-only/Coze KB、B 档等此前仅英文侧或 summary 侧的信息），消除英文比中文多出一整段 guidelines 描述的不对称；中文前 / 英文后格式不变。
 
 ## v0.7.5 — 2026-08-16
 
