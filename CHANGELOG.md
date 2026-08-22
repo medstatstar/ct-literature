@@ -13,6 +13,7 @@ ct- library convention (B-tier public-intel skill, semver-ish).
 - **版本对齐（§9）**：SKILL.md `version` 0.7.6 → 0.9.0；两份 README 版本脚注同步 v0.9.0。
 - **代码修正**：`adapters/__init__.py` docstring 纠正（误写为 ct-samplesize，实际为 ct-literature 出站收口目录）。
 - **术语扩展**：`references/term_map.json` 补充 GLP-1 类药物中英术语（司美格鲁肽 / 替尔泊肽 / 利拉鲁肽 / 瑞他鲁肽 / 度拉糖肽 / 艾塞那肽）。
+- **description 与 summary 统一（§3）**：description 中文部分改为与 summary 完全一致（此前含引文验证、guidelines 构建细节、pointer-only 等额外说明，与 summary 内容不对称），英文部分为对应翻译，中英格式不变。
 
 ## v0.7.6 (2026-08-22) · Bug Report 客户端与规则对齐（ct-base §20.3 同步）+ 发布前 §16 整改
 
