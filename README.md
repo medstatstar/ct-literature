@@ -348,7 +348,7 @@ python scripts/ct_literature.py --topic "osimertinib" \
 
 ---
 
-**Version**: v0.7.6 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.9.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, feel free to contact the author directly at medstatstar@gmail.com (Wintone Zhang / 张文彤).
 

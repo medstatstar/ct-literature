@@ -20,6 +20,15 @@ references/user_terms.json
 # coze 工作流代码包镜像（私有端点源码，§16.7 双平台排除）
 adapters/coze/
 
+# publish_inject 注入副产物（§16.8：注入时自动备份被覆盖文件 + 写入 .ctbase_injected.json 清单，
+# 含本机绝对路径，不随发布包公开）
+.ctbase_injected.json
+*.ctbase_bak_*
+
+# 作者侧批量维护脚本（不属技能运行部件，不随包发布）
+tools/
+adapters/_smoke_guidelines.py
+
 # ── Full-text guideline documents are the author's curated IP and MUST NOT ship with
 # this skill. The builder writes them to an EXTERNAL cache by default
 # (~/.workbuddy/ct-guideline-docs), never under references/guidelines/. These lines are

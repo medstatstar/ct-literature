@@ -3,6 +3,17 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.9.0 (2026-08-22) · Bug Report 功能正式发布（三站点）
+
+发布原因：**增加 bug report 功能**（ct-base §20.3 统一技能错误上报）。
+
+- **Bug Report 功能正式随包发布**：`adapters/bug_report.py` 客户端（11 键脱敏白名单信封 + 两阶段用户确认 + coze 端点 `https://ct-bugreport.coze.site/run` + 本地兜底 `save_local_report`），SKILL.md「Bug Reporting」节与 README 安全与隐私说明同步（自 v0.7.6 起开发完成，本版起纳入正式发布）。
+- **发布树修正（§16.8）**：`adapters/` 下 6 个运行模块此前从未进入 git 索引（`bug_report.py` / `build_guidelines.py` / `fetch_guidelines.py` / `guideline_corpus.py` / `portal_fetch.py` / `_smoke_guidelines.py`），`git archive HEAD` 发布包会缺文件 → 本次全部纳入跟踪，保证 GitHub / SkillHub / ClawHub 三平台发布树一致。
+- **发布包排除补齐**：`.gitignore` / `.clawhubignore` 新增 `.ctbase_injected.json`（含本机绝对路径，不随包公开）、`*.ctbase_bak_*`、`tools/`（作者侧批量维护脚本，非运行部件）、`adapters/_smoke_guidelines.py`（未引用的本地测试脚本）。
+- **版本对齐（§9）**：SKILL.md `version` 0.7.6 → 0.9.0；两份 README 版本脚注同步 v0.9.0。
+- **代码修正**：`adapters/__init__.py` docstring 纠正（误写为 ct-samplesize，实际为 ct-literature 出站收口目录）。
+- **术语扩展**：`references/term_map.json` 补充 GLP-1 类药物中英术语（司美格鲁肽 / 替尔泊肽 / 利拉鲁肽 / 瑞他鲁肽 / 度拉糖肽 / 艾塞那肽）。
+
 ## v0.7.6 (2026-08-22) · Bug Report 客户端与规则对齐（ct-base §20.3 同步）+ 发布前 §16 整改
 
 - **`adapters/bug_report.py` 副本**：补齐 `confirm_thanks`/`build_followup`/`parse_history` + `_MSGS` thank/done/pending 双语文案 + `send_to_endpoint` 透传 `history`（此前缺这些函数）；docstring「三阶段确认」→「两阶段确认」。

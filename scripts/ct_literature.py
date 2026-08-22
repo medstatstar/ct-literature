@@ -41,6 +41,7 @@ import topic_translator  # 检索词 中文→英文 离线词典翻译
 from adapters import verify_citations  # P0: citation identifier verification (anti-hallucination)
 import evidence_log      # P0: provenance audit trail (ct-base §17.1)
 from adapters import fetch_prospero    # P1: PROSPERO systematic-review registry (key-gated, opt-in)
+from adapters import guideline_corpus  # G: curated LOCAL guideline corpus (build-time: build_guidelines.py)
 from adapters import http_utils  # shared GET+retry; load_openalex_key() auto-loads key from env/.env
 import i18n  # bilingual (EN/ZH) localization
 
@@ -132,6 +133,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         max_results=30, with_europepmc=True, with_semantic_scholar=False,
         with_biorxiv=False, with_medrxiv=False, with_arxiv=False,
         with_prospero=False, prospero_token=None, prospero_header="PROSPERO-ACCESS-TOKEN",
+        with_guidelines=False, guideline_sources=None, guideline_max=20,
         verify_mode="all", verify_top_n=15, verify_consistency=True,
         out_dir="./out", make_xlsx=True, make_html=True, openalex_key=None,
         citation_style=DEFAULT_CITATION_STYLE, export_bib=DEFAULT_EXPORT_BIB,
@@ -387,8 +389,35 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     else:  # verify_mode == "background" — handled by the two-phase block below
         pass
 
+    # ---- G: curated LOCAL guideline corpus (build-time populated by build_guidelines.py) ----
+    # Independent of the literature works: kept OUT of normalize.merge so it does not
+    # pollute citation verification / PRISMA. Reads a PINNED local corpus (references/
+    # guidelines/guidelines_index.json) — ZERO network at analysis time. Emitted as
+    # guidelines.json + a `guidelines` block in the merged state. To refresh/extend the
+    # corpus, the author runs: python adapters/build_guidelines.py --topic <topic> --run
+    guidelines_payload = None
+    if with_guidelines:
+        try:
+            _gl_json = os.path.join(out_dir, "guidelines.json")
+            guidelines_payload = guideline_corpus.load(
+                _topic_zh, review_type=review_type,
+                sources=(guideline_sources.strip() if guideline_sources else None),
+                max_results=guideline_max, out=_gl_json)
+            if guidelines_payload.get("corpus_missing"):
+                _out("[WARN] guideline corpus not built yet — run build_guidelines.py first",
+                     "guidelines_missing",
+                     note="python adapters/build_guidelines.py --topic %s --run" % _topic_zh)
+            else:
+                _out("[OK] guideline corpus loaded: %d records"
+                     % guidelines_payload.get("count", 0),
+                     "guidelines_done", count=guidelines_payload.get("count", 0),
+                     source_status=guidelines_payload.get("source_status", {}))
+        except Exception as _ge:
+            _out("[WARN] guideline corpus load failed: %s" % _ge, "guidelines_failed",
+                 error=str(_ge))
+
     # ---- build meta / evidence / exports (shared by all verify modes) ----
-    def _finalize(works, vsum, suffix=""):
+    def _finalize(works, vsum, suffix="", guidelines=None):
         """Render intermediate state + all exports for a given (works, vsum) pair.
 
         suffix=""            -> normal deliverables (lit_report.xlsx / lit_report.html)
@@ -429,6 +458,15 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             _out("[WARN] OpenAlex ran in keyless mode — re-run with a configured key for full coverage.",
                  "warn", kind="keyless")
         out_data = {"count": len(works), "works": works}
+        if guidelines is not None:
+            out_data["guidelines"] = guidelines
+            meta["guidelines"] = {
+                "count": guidelines.get("count", 0),
+                "total_sources": guidelines.get("total_sources"),
+                "api_sources": guidelines.get("api_sources"),
+                "portal_sources": guidelines.get("portal_sources"),
+                "source_status": guidelines.get("source_status", {}),
+            }
         if prisma_block:
             out_data["prisma"] = prisma_block
         out_data["evidence_log"] = evidence
@@ -513,7 +551,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                    "skipped_preview": True, "mode": "background"}
         _out("[OK] background verification: fast unverified preview (results attach later)",
              "verify_mode", mode="background")
-        primary = _finalize(works, vsum_bg, suffix="")
+        primary = _finalize(works, vsum_bg, suffix="", guidelines=guidelines_payload)
         _out("[OK] report ready (unverified preview): %s" % primary,
              "report_ready", primary=primary or "")
         _drain_verifiers()
@@ -525,12 +563,12 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         _out("[OK] citation verification (background): %s"
              % json.dumps(vsum, ensure_ascii=False),
              "verify_done", mode="background", summary=vsum)
-        primary_v = _finalize(works, vsum, suffix="_verified")
+        primary_v = _finalize(works, vsum, suffix="_verified", guidelines=guidelines_payload)
         _out("[OK] report verified -> %s" % primary_v,
              "report_verified", primary=primary_v or "")
         primary = primary_v or primary
     else:
-        primary = _finalize(works, vsum, suffix="")
+        primary = _finalize(works, vsum, suffix="", guidelines=guidelines_payload)
 
     _out("[OK] run finished: %s" % primary, "run_done", primary=primary or "")
     return primary
@@ -572,6 +610,18 @@ def main():
     ap.add_argument("--prospero-header", default="PROSPERO-ACCESS-TOKEN",
                     help="header name carrying the PROSPERO token (default: "
                          "PROSPERO-ACCESS-TOKEN; override if the real header differs)")
+    # ---- G: curated LOCAL guideline corpus (build-time populated by build_guidelines.py) ----
+    ap.add_argument("--with-guidelines", action=argparse.BooleanOptionalAction,
+                    default=False,
+                    help="(G) load the CURATED LOCAL guideline corpus (references/guidelines/"
+                         "guidelines_index.json) — ZERO network at analysis time. The corpus is "
+                         "built/refreshed by the author via: python adapters/build_guidelines.py "
+                         "--topic <topic> --run. Emits guidelines.json + a `guidelines` block in "
+                         ".merged.json. Opt-in (use --no-with-guidelines to disable).")
+    ap.add_argument("--guideline-sources", default=None,
+                    help="comma-separated subset of guideline sources (default: all 12+)")
+    ap.add_argument("--guideline-max", type=int, default=20,
+                    help="max records per live api source (default 20)")
     ap.add_argument("--run", action="store_true", help="execute network requests")
     ap.add_argument("--no-xlsx", action="store_true",
                     help="skip Excel (.xlsx) export (default: auto-generate)")
@@ -650,6 +700,8 @@ def main():
             extra.append("arXiv")
         if args.with_prospero:
             extra.append("PROSPERO(token-gated)")
+        if args.with_guidelines:
+            extra.append("Guidelines(12+)")
         srcs = "OpenAlex" + (" + " + ", ".join(extra) if extra else "")
         _out("[PREVIEW] would run literature pipeline: topic=%r review_type=%r safety=%s "
              "sources=[%s] (use --run)" % (args.topic, args.review_type, args.safety, srcs),
@@ -661,6 +713,9 @@ def main():
         args.with_biorxiv, args.with_medrxiv, args.with_arxiv,
         with_prospero=args.with_prospero, prospero_token=args.prospero_token,
         prospero_header=args.prospero_header,
+        with_guidelines=args.with_guidelines,
+        guideline_sources=args.guideline_sources,
+        guideline_max=args.guideline_max,
         verify_mode=("none" if args.no_verify_citations else args.verify),
         verify_top_n=args.verify_top_n,
         verify_consistency=not args.no_consistency,
