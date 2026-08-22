@@ -99,7 +99,7 @@ Adding `--with-europepmc` (MeSH precision) and `--with-semantic-scholar` (citati
 How do I lift the 100/day limit for large searches?
 
 **Assistant replies (sketch):**
-Apply for a free key (~30s) at <https://openalex.org/settings/api>. Then configure it the way you prefer — **tell the assistant in chat that you want to set up the key** (it writes `OPENALEX_API_KEY=<key>` to `ct-literature/.env` via Write/Edit; the key is stored locally, never echoed back, never logged, and sent only over HTTPS to the official OpenAlex API), or do it yourself via (a) adding `OPENALEX_API_KEY=<key>` to `ct-literature/.env`, (b) exporting an `OPENALEX_API_KEY` environment variable, or (c) passing `--openalex-key <key>` on the command line. **Note:** chat messages may be logged or retained by the platform — if you want maximum secrecy, use the self-config routes (a)–(c).
+Apply for a free key (~30s) at <https://openalex.org/settings/api>. Configure it yourself via (a) adding `OPENALEX_API_KEY=<key>` to `ct-literature/.env`, (b) exporting an `OPENALEX_API_KEY` environment variable, or (c) passing `--openalex-key <key>` on the command line. **Note:** chat messages may be logged or retained by the platform — for maximum secrecy use the self-config routes (a)–(c). If you prefer, you can also ask the assistant to write the key into `ct-literature/.env` for you — it stores the key locally, never echoes it back, never logs it, and sends it only over HTTPS to the official OpenAlex API.
 
 ### Example 5 · Get the Excel deliverable
 **You say:**
@@ -228,7 +228,7 @@ The skill covers published-evidence retrieval across the clinical-trial lifecycl
 ### Outbound & Privacy (public retrieval only)
 - **The only outbound paths = the public bibliographic APIs:** when you run a search, your topic query + filters are sent to **OpenAlex** (`api.openalex.org`), **Europe PMC** (`ebi.ac.uk/europepmc`), and **Semantic Scholar** (`api.semanticscholar.org`) — only the sources you enable. During citation verification (default ON) the skill additionally contacts **`doi.org`** (DOI resolution) and **Crossref** (`api.crossref.org`, for the title/author consistency check). There is **no other outbound path** and **no confidential / sponsor data is ever sent**.
 - **Keys stay on your machine:** If you configure an OpenAlex / S2 key, it is read from your local `ct-literature/.env` and **never ships with the package** — `.env` is excluded by `.gitignore` (GitHub) / `.clawhubignore` (ClawHub), and SkillHub's narrow allowlist also omits it; only `.env.example` ships. After a reinstall you re-enter the key yourself.
-- **You must apply for your own key — the skill does not bundle or provision one:** Get a free OpenAlex key yourself at <https://openalex.org/settings/api> (~30s). To configure it, either **tell the assistant in chat that you want to set it up** (it writes the key to `ct-literature/.env` via Write/Edit; the key is stored locally, never echoed back, never logged, and sent only over HTTPS to the official OpenAlex API), or set it yourself via §7 (`.env` / env var / `--openalex-key`). **Reminder:** chat messages may be logged or retained — for maximum secrecy, prefer the self-config routes in §7. Never copy a key from someone else's `.env`, and never commit `.env` to a repo.
+- **You must apply for your own key — the skill does not bundle or provision one:** Get a free OpenAlex key yourself at <https://openalex.org/settings/api> (~30s). Configure it yourself via §7 (`.env` / env var / `--openalex-key`). **Reminder:** chat messages may be logged or retained — for maximum secrecy, always use the self-config routes in §7. Never copy a key from someone else's `.env`, and never commit `.env` to a repo. (The assistant can also write the key into `ct-literature/.env` for you on request — it is stored locally, never echoed back or logged, and sent only over HTTPS to the official OpenAlex API.)
 
 ---
 
@@ -348,7 +348,7 @@ python scripts/ct_literature.py --topic "osimertinib" \
 
 ---
 
-**Version**: v0.6.11 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.7.6 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, feel free to contact the author directly at medstatstar@gmail.com (Wintone Zhang / 张文彤).
 
@@ -356,8 +356,11 @@ For feature requests, bug reports, or other feedback, feel free to contact the a
 
 ## Confidentiality Notice
 
-> The CT series consists of 20+ skills, providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle. However, since many skills involve strictly confidential clinical-trial data and internal information from pharma sponsors, only the non-confidential Level A / B skills are published openly on GitHub; the confidential Level C / D skills (e.g., ct-analysis) are designated for internal enterprise use only.
-
+> The CT series consists of 20+ specialized domain skills, organized into two tiers — A, B — by "confidential-data-exfiltration risk + whether external retrieval is needed", providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
+>
+> - **Tier A (non-confidential · public)**: takes only ordinary (non-confidential) input; runs fully locally (`network=off`) or performs public retrieval (`network=public-retrieval`, e.g. ct-registry / ct-advisor) — never involves confidential information. Tier A skills are published openly on GitHub.
+> - **Tier B (confidential · internal)**: involve strictly confidential clinical-trial data and internal information from pharma sponsors (e.g., ct-analysis, ct-sdtm, ct-eligibility); Tier B is processed locally (`egress=none`, data never leaves the machine) or requires approved egress (`egress=approval-req`, e.g. ct-eligibility). These skills are designated for internal enterprise use only and are not publicly released at present.
+>
 > If you do have a genuine need for these confidential skills, please contact the author to request custom installation.
-
+>
 > 📧 Contact: medstatstar@gmail.com (Wintone Zhang / 张文彤)

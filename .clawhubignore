@@ -1,19 +1,32 @@
-# ── Secrets: never ship the user's real API key with the published package ──
-# OpenAlex key lives in .env (gitignored). ClawHub packaging must NOT transfer it.
-.env
-.env.*
-!.env.example
-
-# ── Local injection / build metadata (machine-specific, never publish) ──
-.ctbase_injected.json
-*.ctbase_bak_*
-
-# ── Local build / test artifacts (keep the package lean) ──
-out_*/
-# 测试内容（源码 + 夹具 + 运行产物）一律不进发布包（ct-base §16.8 红线，2026-08-13）
+# ── 发布包剔除项（§16.8；与 .gitignore 双平台对齐）────────────────
+# 测试 / 缓存 / 中间产物不进包
 tests/
-scripts/tests/
 __pycache__/
 *.pyc
-# 一次性开发工具（迁移/批量修复脚本，非技能运行所需，不进发布包）
-tools/
+*.pyo
+*.db
+out/
+*.log
+.Rhistory
+.RData
+staging/
+
+# 本地凭据不进包（README 承诺：仅 .env.example 随包发布；用户自行配置 key）
+.env
+
+# 用户自定义检索词扩展（README 承诺 git-ignored，随包公开会泄漏用户词库）
+references/user_terms.json
+
+# coze 工作流代码包镜像（私有端点源码，§16.7 双平台排除）
+adapters/coze/
+
+# ── Full-text guideline documents are the author's curated IP and MUST NOT ship with
+# this skill. The builder writes them to an EXTERNAL cache by default
+# (~/.workbuddy/ct-guideline-docs), never under references/guidelines/. These lines are
+# defense-in-depth in case someone overrides --doc-cache-dir to live inside the skill tree.
+# The pointer index (guidelines_index.json) is intentionally NOT ignored — it is the skill's data.
+references/guidelines/docs/
+references/guidelines/**/*.pdf
+references/guidelines/**/*.xml
+references/guidelines/**/*.html
+ct-guideline-docs/

@@ -1,32 +1,32 @@
-# OpenAlex API key（含凭据，禁止提交到任何远端）
-.env
-.env.*
-
-# 运行产物（中间 JSON / 报告，按需保留）
-out_*/
-
-# 测试 harness 产物
-tests/out/
-tests/results/
-tests/smoke_out/
-tests/scenario10_run/
-tests/scenario10b_run/
-tests/scenario10b_run/
-
-# 硬化回归脚本（开发产物，不纳入发布包）
-tests/scenario10c.py
-tests/scenario10c_x10.py
-
-# 本地注入/构建元数据（含本机绝对路径，禁止发布）
-.ctbase_injected.json
-*.ctbase_bak_*
-
-# Python 缓存
+# ── 发布包排除（§16.8；与 .clawhubignore 双平台对齐）────────────────
+# 测试 / 缓存 / 中间产物不进包
+tests/
 __pycache__/
 *.pyc
+*.pyo
+*.db
+out/
+*.log
+.Rhistory
+.RData
+staging/
 
-# 一次性开发工具（迁移/批量修复脚本，非技能运行所需，不进发布包）
-tools/
+# 本地凭据不进包（README 承诺：仅 .env.example 随包发布；用户自行配置 key）
+.env
 
-# 用户自定义翻译词典（个人扩充，不进发布包；格式同 term_map：{中文: "英文" | ["英文1","英文2"]}）
+# 用户自定义检索词扩展（README 承诺 git-ignored，随包公开会泄漏用户词库）
 references/user_terms.json
+
+# coze 工作流代码包镜像（私有端点源码，§16.7 双平台排除）
+adapters/coze/
+
+# ── Full-text guideline documents are the author's curated IP and MUST NOT ship with
+# this skill. The builder writes them to an EXTERNAL cache by default
+# (~/.workbuddy/ct-guideline-docs), never under references/guidelines/. These lines are
+# defense-in-depth in case someone overrides --doc-cache-dir to live inside the skill tree.
+# The pointer index (guidelines_index.json) is intentionally NOT ignored — it is the skill's data.
+references/guidelines/docs/
+references/guidelines/**/*.pdf
+references/guidelines/**/*.xml
+references/guidelines/**/*.html
+ct-guideline-docs/
