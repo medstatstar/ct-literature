@@ -55,7 +55,7 @@ python scripts/ct_literature.py --topic "osimertinib" --review-type all \
 | `--year-from` | — | Lower bound of publication year |
 | `--year-to` | — | Upper bound (giving `--year-from` alone does NOT narrow to a single year) |
 | `--safety` | off | Safety / CSM bias (AE, toxicity, case report, pharmacovigilance) |
-| `--max` | `30` | Max works per source |
+| `--max` | `50` | Max works per source |
 | `--with-europepmc` | off | Add Europe PMC (MEDLINE/MeSH precision) |
 | `--with-semantic-scholar` | off | Add Semantic Scholar (citation ranking; 429-degrades) |
 | `--run` | off | **Required** to actually hit the network; otherwise PREVIEW only |

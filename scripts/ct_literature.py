@@ -130,7 +130,7 @@ DEFAULT_RANK = "cited"  # keep legacy cited-by ordering unless --rank relevance
 
 
 def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
-        max_results=30, with_europepmc=True, with_semantic_scholar=False,
+        max_results=50, with_europepmc=True, with_semantic_scholar=False,
         with_biorxiv=False, with_medrxiv=False, with_arxiv=False,
         with_prospero=False, prospero_token=None, prospero_header="PROSPERO-ACCESS-TOKEN",
         with_guidelines=False, guideline_sources=None, guideline_max=20,
@@ -138,7 +138,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         out_dir="./out", make_xlsx=True, make_html=True, openalex_key=None,
         citation_style=DEFAULT_CITATION_STYLE, export_bib=DEFAULT_EXPORT_BIB,
         prisma=DEFAULT_PRISMA, rank=DEFAULT_RANK, keywords=None,
-        obsidian=False, zotero=False, lang="auto"):
+        obsidian=False, zotero=False, lang="auto", cochrane=False):
     os.makedirs(out_dir, exist_ok=True)
     # normalize --keywords (comma-separated string) → list once, so scoring AND all
     # exporters (HTML banner / XLSX scope / meta JSON) see the same shape
@@ -171,8 +171,8 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     # Each source is an independent network call that writes its own JSON file; running
     # them concurrently turns the summed per-source latency into the latency of the
     # SLOWEST source. (Intra-source multi-page pagination stays serial inside each
-    # fetcher — default max_results=30 fits one page, and parallel paging would raise
-    # rate-limit risk on the keyless pool.)
+    # fetcher — default max_results=50 stays within ~2 pages of 25 and keeps
+    # rate-limit risk low on the keyless OpenAlex pool.)
     jobs = []
     jobs.append(("OpenAlex", lambda: fetch_openalex.fetch(
         topic, review_type, year_from, year_to, safety, max_results,
@@ -180,7 +180,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     if with_europepmc:
         jobs.append(("EuropePMC", lambda: fetch_europepmc.fetch(
             topic, review_type, year_from, year_to, safety, max_results,
-            run=True, out=epmc_json)))
+            run=True, out=epmc_json, cochrane=cochrane)))
     if with_semantic_scholar:
         jobs.append(("SemanticScholar", lambda: fetch_semantic_scholar.fetch(
             topic, review_type, year_from, year_to, safety, max_results,
@@ -325,6 +325,31 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
 
     works = normalize.merge(payloads)
 
+    # Full API total for the Cochrane journal-filtered Europe PMC query — captured
+    # from the fetcher's `hit_count` (independent of --max), so it reports the true
+    # Cochrane count rather than just the capped sample we fetched for reading.
+    _epmc_payload = next((p for p in payloads if p.get("source") == "EuropePMC"), None)
+    _epmc_hit = (_epmc_payload or {}).get("hit_count")
+
+    # ---- Cochrane-only focus (--cochrane): keep only works whose publication is
+    # the Cochrane Database of Systematic Reviews. The Europe PMC leg is already
+    # journal-filtered; this also drops any non-Cochrane OpenAlex/other hits so
+    # the merged set is a clean Cochrane set. Uses the unified `publication`
+    # field (present in every source's normalized record). ----
+    if cochrane:
+        _before = len(works)
+        works = [w for w in works
+                 if "cochrane" in (w.get("publication") or "").lower()]
+        cochrane_count = len(works)          # sample kept for reading / reporting
+        cochrane_total = _epmc_hit           # full API total (independent of --max)
+        _out("[cochrane] kept %d Cochrane work(s) from %d merged; "
+             "full Cochrane total (Europe PMC) = %s"
+             % (len(works), _before, cochrane_total), "cochrane_filter",
+             kept=len(works), total=_before, full_total=cochrane_total)
+    else:
+        cochrane_count = None
+        cochrane_total = None
+
     # ---- P0-C: relevance scoring (annotates merged works, incremental) ----
     works = score_relevance.score_works(works, topic=topic, keywords=keywords)
 
@@ -433,6 +458,9 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 "prisma": prisma_block,
                 "verification": vsum,
                 "with_prospero": with_prospero,
+                "cochrane": cochrane,
+                "cochrane_count": cochrane_count,
+                "cochrane_total": cochrane_total,
                 "source_notes": source_notes}
         if _tp["translated"]:  # 中文→英文翻译信息（供报告展示与溯源）
             meta["topic_en"] = _tp["topic_en"]
@@ -584,7 +612,7 @@ def main():
     ap.add_argument("--year-to", type=int, help="upper bound publication year")
     ap.add_argument("--safety", action="store_true",
                     help="safety / CSM bias (AE, toxicity, case report, PV)")
-    ap.add_argument("--max", type=int, default=30, help="max works per source")
+    ap.add_argument("--max", type=int, default=50, help="max works per source")
     ap.add_argument("--with-europepmc", action=argparse.BooleanOptionalAction, default=True,
                     help="search Europe PMC (MEDLINE/MeSH, biomedical precision); default ON; "
                          "use --no-with-europepmc to disable")
@@ -599,6 +627,11 @@ def main():
                     help="include medRxiv preprints (medical/clinical preprints, via Europe PMC PPR index)")
     ap.add_argument("--with-arxiv", action="store_true",
                     help="include arXiv (physics/CS/ML methodology breadth; opt-in supplementary)")
+    ap.add_argument("--cochrane", action="store_true",
+                    help="(focus) restrict the Europe PMC leg to the Cochrane Database of "
+                         "Systematic Reviews via a verified journal filter, then keep only "
+                         "Cochrane works after merge — a clean Cochrane-only retrieval. "
+                         "Pairs with meta-analysis's in-skill dedup probe (same filter string).")
     # ---- P1: PROSPERO systematic-review registry (opt-in, key-gated, UNVERIFIED) ----
     ap.add_argument("--with-prospero", action="store_true",
                     help="(P1, supplementary) include PROSPERO systematic-review registry "
@@ -700,6 +733,8 @@ def main():
             extra.append("arXiv")
         if args.with_prospero:
             extra.append("PROSPERO(token-gated)")
+        if args.cochrane:
+            extra.append("Cochrane(EPMC journal filter)")
         if args.with_guidelines:
             extra.append("Guidelines(12+)")
         srcs = "OpenAlex" + (" + " + ", ".join(extra) if extra else "")
@@ -724,7 +759,7 @@ def main():
         openalex_key=args.openalex_key, citation_style=args.citation_style,
         export_bib=args.export_bib, prisma=args.prisma, rank=args.rank,
         keywords=args.keywords, obsidian=args.obsidian, zotero=args.zotero,
-        lang=args.lang)
+        lang=args.lang, cochrane=args.cochrane)
 
 
 if __name__ == "__main__":

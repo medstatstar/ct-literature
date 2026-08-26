@@ -3,6 +3,10 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (B-tier public-intel skill, semver-ish).
 
+## v0.9.5 (2026-08-26) · 版本整合（单一事实源对齐；无功能性 release note）
+
+- 版本号统一为 0.9.5（SKILL.md frontmatter + 双 README 页脚），与 CHANGELOG 顶部对齐；本版不含独立功能变更记录，详见下方 v0.9.0。
+
 ## v0.9.0 (2026-08-22) · Bug Report 功能正式发布（三站点）
 
 发布原因：**增加 bug report 功能**（ct-base §20.3 统一技能错误上报）。

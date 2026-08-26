@@ -216,6 +216,15 @@ The skill covers published-evidence retrieval across the clinical-trial lifecycl
 - **No guarantee:** Many papers have no legal OA copy — the skill reports which ones resolved and which did not.
 - **How to ask:** Provide a specific DOI/PMID list (e.g., from your report) and say "try to fetch legal OA PDFs for these".
 
+**Q: What if I found an error in the result — how do I report it?**
+A: This skill follows the ct-base §20.3 bug-report workflow. If you suspect the result is wrong (or the engine errored), just say **"report a bug" / "上报问题" / "提交错误报告"**. The skill also **proactively asks** whether to report when it detects a likely defect (e.g. the engine errors or retries still fail) — at most **once per session**, and you can always decline. Either way, the assistant will:
+1. **Propose a sanitized report** (11-field whitelist: skill / skill_version / test / error_type / error_code / engine_status / description / locale / query_origin / session_hash / attempts — **no raw input values or personal data**, except the `description` field where you decide what to disclose, e.g. the algorithm/function used and the error message);
+2. **Show the full report text for your review** — you can add a problem description or correct anything before confirming;
+3. **Send after your explicit confirmation** — to the unified endpoint `https://ct-bugreport.coze.site/run` (if this session called coze) or saved locally + emailed to the author (if purely local, data never leaves your machine);
+4. **Receive an acknowledgment** — including whether a previously submitted report from your source has already been fixed (with the fix note) or is still pending.
+
+You stay in full control: the report is shown to you **before** anything is sent, and nothing is transmitted without your explicit "send" confirmation.
+
 ---
 
 ## Security & Privacy
@@ -348,7 +357,7 @@ python scripts/ct_literature.py --topic "osimertinib" \
 
 ---
 
-**Version**: v0.9.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.9.5 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, feel free to contact the author directly at medstatstar@gmail.com (Wintone Zhang / 张文彤).
 

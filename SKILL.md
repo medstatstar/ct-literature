@@ -3,7 +3,7 @@ slug: ct-literature
 name: ct-literature
 displayName: 临床试验文献检索专家 / Clinical Trial Literature Search
 cn_name: 临床试验文献检索专家
-version: 0.9.0
+version: 0.9.5
 invocable: true
 summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + Semantic Scholar 引用增强 + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集，附带可选英文→中文摘要术语标注工具（本地、术语级替换，非全文翻译）；临床指南 12+ 源「本地语料库」模式。
 license: MIT
@@ -35,8 +35,8 @@ permissions:
 
 ## Language
 
-- **English guide** → [README.md](./README.md) · **中文指南** → [README_zh-CN.md](./README_zh-CN.md)
-- Responds in the user's input language (auto locale detect). SKILL.md body / `references/*.md` / `AGENTS.md` are English-only (agent-facing). Walkthroughs & troubleshooting → README.
+- **English guide** → [README.md](https://github.com/medstatstar/ct-literature/blob/main/README.md) · **中文指南** → [README_zh-CN.md](https://github.com/medstatstar/ct-literature/blob/main/README_zh-CN.md)
+- Bilingual auto-switch: the answer language follows the user's question language (English question → English answer, Chinese question → Chinese answer).
 
 ## Purpose
 
@@ -61,6 +61,7 @@ The four B-tier public-intel skills are complementary:
 |---|---|---|---|
 | OpenAlex | Public REST; free key recommended (100k/day via `.env` auto-load) — keyless capped 100/day since 2026-02-13 | Required (primary) | Broad coverage + citation counts |
 | Europe PMC | Public REST (MEDLINE / PubMed Central), no key, MeSH-indexed | **Default ON** (`--no-with-europepmc`) | Biomedical precision + MeSH |
+| Cochrane (CDSR) | Via Europe PMC journal filter | Opt-in `--cochrane` | Cochrane Database of Systematic Reviews only |
 | Semantic Scholar | Public Graph API, no key, rate-limited (429) | Optional `--with-semantic-scholar` | Citation-aware ranking; degrades gracefully on 429 |
 | bioRxiv / medRxiv | Via Europe PMC `SRC:PPR` + publisher filter | Optional `--with-biorxiv` / `--with-medrxiv` | Preprints (Tier P) |
 | arXiv | Public Atom API, no key | Optional `--with-arxiv` | Methodology breadth |
@@ -94,6 +95,7 @@ Guidelines are **version-pinned** reference standards — at analysis time we re
 |---|---|---|
 | Topic / drug / disease search | All | Build the published-evidence base |
 | Review-type filter | All | `systematic-review` / `meta-analysis` / `rct` / `case-report` |
+| **Cochrane retrieval (focus)** | Europe PMC | `--cochrane` → restrict to the Cochrane Database of Systematic Reviews (verified journal filter, shared with meta-analysis) |
 | Year-range filter | All | Focus on recent evidence |
 | Safety / CSM bias | All | Surface published AE / PV literature |
 | Multi-source merge + dedupe | normalize | One unified list, DOI/title de-duped, provenance kept |
@@ -157,6 +159,9 @@ python scripts/ct_literature.py --topic "osimertinib" --review-type systematic-r
 # Add Europe PMC (default ON) + Semantic Scholar (may 429 -> skipped)
 python scripts/ct_literature.py --topic "osimertinib" --with-europepmc --with-semantic-scholar --run --out-dir ./out
 
+# Cochrane-only retrieval (focus on the Cochrane Database of Systematic Reviews)
+python scripts/ct_literature.py --topic "NSCLC" --cochrane --with-europepmc --run --out-dir ./out
+
 # Clinical guidelines: build once (network), read many (zero network)
 python adapters/build_guidelines.py --topic "diabetes" --run          # author/build-time; omit --run = SAFE PREVIEW
 python scripts/ct_literature.py --topic "2型糖尿病" --with-guidelines --run --out-dir ./out
@@ -177,13 +182,9 @@ See `references/errors.md` for the full error catalogue (network / 429 / 401 / e
 
 ## Cross-Database Search Mode
 
-A cross-database planning layer (Embase / Cochrane / Web of Science + preprint Tier P, adapted from `multi-database-literature-collector`, AIPOCH MIT) builds search strategy; live fetch still runs the six sources. See `references/multi-db-search.md`.
+A cross-database planning layer (Embase / Cochrane / Web of Science + preprint Tier P, adapted from `multi-database-literature-collector`, AIPOCH MIT) builds search strategy; live fetch still runs the six sources. See `references/multi-db-search.md`. The **Cochrane** leg is now directly automatable via `--cochrane` (a verified Europe PMC journal filter — identical to meta-analysis's in-skill dedup probe), so CDSR needs no manual browser step.
 
-## Natural language dialogue
-
-Follow `references/search_menu.md`: parse topic / review_type / year / safety; ≥2 params → preview; otherwise ≤2 rounds then default; preview → confirm → `--run` → present summary. Atomic-task units: `references/units.md`.
-
-**Before the fetch begins, warn the user it may take several minutes** (the pipeline prints a localized time estimate at run start; mirror it in chat). `--verify all` 1–4 min on large result sets; `--verify top` ~1–3 min; `--verify none` ~1 min.
+Natural-language dialogue follows `references/search_menu.md` (ct-base Type-Search framework, triage-first).
 
 ## Bug Reporting (ct-base §20.3, adapter: `adapters/bug_report.py`)
 

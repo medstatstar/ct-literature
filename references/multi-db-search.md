@@ -171,3 +171,5 @@ Behaviour in this mode:
 3. Provide an import slot so manually exported records can be normalized into the same schema and merged/de-duplicated with the automated set.
 4. Label every record with evidence status and preliminary tier.
 5. Report the full strategy (terms, synonyms, filters, per-database adaptation) so the search is reproducible in a PRISMA appendix.
+
+**Cochrane (CDSR) note:** the Cochrane Database of Systematic Reviews is now retrievable directly via `--cochrane` — a verified Europe PMC journal filter (identical to meta-analysis's in-skill dedup probe, so cross-skill hit counts stay consistent). No manual browser step is needed for CDSR. Embase / Web of Science remain manual (subscription).

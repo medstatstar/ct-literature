@@ -21,6 +21,16 @@ from adapters import http_utils  # shared GET+retry (exponential backoff, 429 Re
 
 BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 
+# Cochrane Database of Systematic Reviews — restrict to the journal itself.
+# Verified 2026-08-26: `JOURNAL:"The Cochrane database of systematic reviews"`
+# returns accurate counts; the looser bare-phrase match overcounts (it also
+# catches papers that merely *cite* Cochrane), and `PUBLICATION_TYPE:"Cochrane
+# Reviews"` returns 0 (the pubType value is "Systematic Review", not "Cochrane
+# Reviews"). This is the SAME filter string meta-analysis.literature_probe uses,
+# so cross-skill hit counts stay consistent.
+COCHRANE_JOURNAL_FILTER = '(JOURNAL:"The Cochrane database of systematic reviews")'
+COCHRANE_JOURNAL_MARK = "cochrane database of systematic reviews"
+
 SAFETY_LEXICON = [
     "adverse event", "adverse reaction", "side effect", "safety", "toxicity",
     "toxic", "case report", "pharmacovigilance", "drug-induced", "drug reaction",
@@ -106,6 +116,7 @@ def _extract(rec):
         "abstract_snippet": abstract or "",
         "mesh": mesh or None,
         "is_safety": _flag_safety(title, abstract),
+        "is_cochrane": bool(journal and COCHRANE_JOURNAL_MARK in journal.lower()),
         "volume": ji.get("volume"),
         "issue": ji.get("issue"),
         "page": rec.get("pageInfo"),
@@ -113,7 +124,7 @@ def _extract(rec):
 
 
 def fetch(topic, review_type="all", year_from=None, year_to=None,
-          safety=False, max_results=30, run=False, out=None):
+          safety=False, max_results=30, run=False, out=None, cochrane=False):
     if not run:
         print("[PREVIEW] would query Europe PMC for topic=%r review_type=%r (use --run to execute)"
               % (topic, review_type))
@@ -138,7 +149,11 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
         hi = str(year_to) if year_to else "3000"
         q += " AND (PUB_YEAR:[%s TO %s])" % (lo, hi)
 
+    if cochrane:
+        q += " AND " + COCHRANE_JOURNAL_FILTER
+
     collected = []
+    total_hits = None  # Europe PMC's full matching count (independent of max_results)
     page = 1
     per = 25
     while len(collected) < max_results:
@@ -156,6 +171,8 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
         except http_utils.HttpError as e:
             print("[WARN] Europe PMC request failed: %s" % e)
             break
+        if total_hits is None:
+            total_hits = j.get("hitCount")
         results = (j.get("resultList") or {}).get("result", [])
         if not results:
             break
@@ -173,6 +190,8 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
         "year_from": year_from,
         "year_to": year_to,
         "safety": safety,
+        "cochrane": cochrane,
+        "hit_count": total_hits,
         "count": len(collected),
         "works": collected,
     }
@@ -192,12 +211,15 @@ def main():
     ap.add_argument("--year-from", type=int)
     ap.add_argument("--year-to", type=int)
     ap.add_argument("--safety", action="store_true")
-    ap.add_argument("--max", type=int, default=30)
+    ap.add_argument("--cochrane", action="store_true",
+                    help="restrict to the Cochrane Database of Systematic Reviews "
+                         "(journal filter via Europe PMC)")
+    ap.add_argument("--max", type=int, default=50)
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--out")
     args = ap.parse_args()
     res = fetch(args.topic, args.review_type, args.year_from, args.year_to,
-                args.safety, args.max, args.run, args.out)
+                args.safety, args.max, args.run, args.out, cochrane=args.cochrane)
     if res and not args.out:
         print(json.dumps(res, ensure_ascii=False, indent=2))
 
