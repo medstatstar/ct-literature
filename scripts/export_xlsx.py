@@ -94,6 +94,7 @@ _LOCAL = {
     "prov.generated":  {"en": "Generated", "zh": "生成时间"},
     "prov.source":     {"en": "Sources", "zh": "数据来源"},
     "col.source":      {"en": "Source", "zh": "来源"},
+    "col.doi":         {"en": "DOI", "zh": "DOI"},
     "col.year":        {"en": "Year", "zh": "年份"},
     "col.title":       {"en": "Title", "zh": "标题"},
     "col.authors":     {"en": "Authors", "zh": "作者"},
@@ -104,6 +105,7 @@ _LOCAL = {
     "col.is_safety":   {"en": "Safety", "zh": "安全性"},
     "col.url":         {"en": "Link", "zh": "链接"},
     "col.oa":          {"en": "Open Access", "zh": "开放获取链接"},
+    "col.abstract":    {"en": "Abstract", "zh": "摘要"},
     "col.mesh":        {"en": "MeSH", "zh": "MeSH"},
     "col.funders":     {"en": "Funders", "zh": "资助方"},
     "col.count":       {"en": "Count", "zh": "数量"},
@@ -142,6 +144,8 @@ _LOCAL = {
     "f.is_safety":     {"en": "Safety-related flag (Y / —, amber-highlighted in the table)",
                        "zh": "是否安全性相关（Y / —，表中琥珀色高亮）"},
     "f.url":           {"en": "Link to the original / DOI", "zh": "原文 / DOI 链接"},
+    "f.abstract":      {"en": "Abstract snippet (for judging relevance before download)",
+                       "zh": "摘要片段（用于下载前判断相关性）"},
     "f.mesh":          {"en": "MeSH terms (Europe PMC)", "zh": "医学主题词（Europe PMC）"},
     "f.funders":       {"en": "Funding organisations (OpenAlex)", "zh": "资助机构（OpenAlex）"},
     # ---- caveat callout (data caveats) ----
@@ -316,6 +320,7 @@ def build_readme(wb, data, fmts):
         ("col.publication", "f.publication"), ("col.type", "f.type"),
         ("col.study_type", "f.study_type"), ("col.cited", "f.cited"),
         ("col.is_safety", "f.is_safety"), ("col.url", "f.url"),
+        ("col.abstract", "f.abstract"),
         ("col.mesh", "f.mesh"), ("col.funders", "f.funders"),
     ]
     for i, (ck, mk) in enumerate(fields):
@@ -345,6 +350,7 @@ def build_readme(wb, data, fmts):
 # never drift apart (2026-08-15: Safety sheet was missing autofilter and the
 # OA column width, causing header-wrap).
 _WORKS_COLS = [("source", t("col.source"), 14),
+               ("doi", t("col.doi"), 22),
                ("year", t("col.year"), 8),
                ("title", t("col.title"), 52),
                ("authors", t("col.authors"), 34),
@@ -354,13 +360,52 @@ _WORKS_COLS = [("source", t("col.source"), 14),
                ("cited_by_count", t("col.cited"), 10),
                ("is_safety", t("col.is_safety"), 10),
                ("url", t("col.url"), 22),
-               ("open_access_url", t("col.oa"), 28)]
+               ("open_access_url", t("col.oa"), 28),
+               ("abstract_snippet", t("col.abstract"), 60)]
 
 
-def _write_works_table(ws, works, fmts, safety_hl, start_row=0):
+def _norm_doi(doi):
+    """归一化 DOI 作为匹配键（works ↔ decisions）。"""
+    if not doi:
+        return ""
+    return str(doi).strip().lower()
+
+
+def _norm_title(title):
+    """归一化标题作为匹配键（DOI 缺失时回退）。"""
+    if not title:
+        return ""
+    return " ".join(str(title).strip().lower().split())
+
+
+def _build_decision_map(decisions):
+    """把 [{doi,title,decision,reason}, ...] 建成 {匹配键: (decision, reason)}。
+
+    匹配键优先 DOI（更稳），DOI 缺失/重复时回退归一化标题。
+    返回 dict：键为 _norm_doi 或 _norm_title 的结果。
+    """
+    mp = {}
+    if not decisions:
+        return mp
+    for d in decisions:
+        if not isinstance(d, dict):
+            continue
+        dec = d.get("decision")
+        reason = d.get("reason") or ""
+        key = _norm_doi(d.get("doi")) or _norm_title(d.get("title"))
+        if key:
+            mp[key] = (dec, reason)
+    return mp
+
+
+def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=None):
     cols = _WORKS_COLS
+    has_dec = bool(decision_map)
+    # 决策列（可选）：仅在传入 decisions 时出现，避免影响普通检索导出
+    extra = [("decision", "裁决", 12), ("reason", "理由", 40)] if has_dec else []
+    all_cols = cols + extra
     ws.set_row(start_row, HEADER_H)
-    for ci, (_, h, _) in enumerate(cols):
+    for ci, (_, h, _) in enumerate(all_cols):
         ws.write(start_row, ci, h, fmts["header"])
     for ri, w in enumerate(works, start=start_row + 1):
         zebra = ((ri - start_row - 1) % 2 == 1)
@@ -389,24 +434,39 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0):
                     ws.write_url(ri, ci, oa, fmts["link"], string="OA PDF")
                 else:
                     ws.write(ri, ci, "—", row_fmt)
+            elif key == "abstract_snippet":
+                # 摘要片段截断展示，避免超长文本撑爆单元格
+                ws.write(ri, ci, (v or "")[:500], row_fmt)
             elif key == "cited_by_count":
                 ws.write(ri, ci, v if v is not None else 0, fmts["right"])
             else:
                 ws.write(ri, ci, v, row_fmt)
+        if has_dec:
+            # 按 DOI（优先）/ 标题匹配本行对应的裁决/理由
+            key = _norm_doi(w.get("doi")) or _norm_title(w.get("title"))
+            dec, reason = decision_map.get(key, (None, ""))
+            ci0 = len(cols)
+            ws.write(ri, ci0, dec or "", base)
+            ws.write(ri, ci0 + 1, reason or "", base)
     return len(works)
 
 
-def build_works(wb, data, fmts, safety_hl):
+def build_works(wb, data, fmts, safety_hl, decisions=None):
     ws = wb.add_worksheet(t("sheet.works"))
     _page_decor(ws, t("sheet.works"), fmts)
     ws.set_tab_color(BLUE)
     works = data.get("works") or []
-    n = _write_works_table(ws, works, fmts, safety_hl)
+    dmap = _build_decision_map(decisions) if decisions else None
+    n = _write_works_table(ws, works, fmts, safety_hl, decision_map=dmap)
     ws.freeze_panes(1, 0)
+    ncols = len(_WORKS_COLS) + (2 if dmap else 0)
     if works:
-        ws.autofilter(0, 0, n, len(_WORKS_COLS) - 1)
+        ws.autofilter(0, 0, n, ncols - 1)
     for ci, (_, _, w) in enumerate(_WORKS_COLS):
         ws.set_column(ci, ci, w)
+    if dmap:
+        ws.set_column(len(_WORKS_COLS), len(_WORKS_COLS), 12)       # 裁决
+        ws.set_column(len(_WORKS_COLS) + 1, len(_WORKS_COLS) + 1, 40)  # 理由
     return ws
 
 
@@ -527,7 +587,17 @@ def build_overview(wb, data, fmts):
     return ws
 
 
-def build_safety(wb, data, fmts, safety_hl):
+def build_safety(wb, data, fmts, safety_hl, safety=False):
+    """Safety-Related sheet (opt-in).
+
+    Only emitted when the run was requested with `--safety` (the CSM /
+    safety-literature subset). In a plain literature search this sheet is
+    intentionally NOT created — the safety/CSM qualitative subset is the
+    domain of an explicit safety-oriented call (or a ct-safety chained
+    invocation), not a default deliverable of every search.
+    """
+    if not safety:
+        return None
     ws = wb.add_worksheet(t("sheet.safety"))
     _page_decor(ws, t("sheet.safety"), fmts)
     ws.set_tab_color(BLUE)
@@ -734,7 +804,7 @@ def sanitize(data):
     return data
 
 
-def export_workbook(data, out_path, lang="auto"):
+def export_workbook(data, out_path, lang="auto", safety=False, decisions=None):
     data = sanitize(data)
     # Promote provenance / verification blocks from `meta` when the caller passed
     # them nested (the pipeline passes {count, works, meta}); the standalone CLI
@@ -760,8 +830,11 @@ def export_workbook(data, out_path, lang="auto"):
                                        "text_wrap": True})
     build_readme(wb, data, fmts)
     build_overview(wb, data, fmts)
-    build_works(wb, data, fmts, fmts["safety_hl"])
-    build_safety(wb, data, fmts, fmts["safety_hl"])
+    build_works(wb, data, fmts, fmts["safety_hl"], decisions=decisions)
+    # Safety-Related sheet is opt-in: only when --safety (CSM subset) is requested.
+    # A plain literature search keeps the workbook to 3 sheets (README / Overview /
+    # Works / Evidence Log) — the safety subset is NOT a default deliverable.
+    build_safety(wb, data, fmts, fmts["safety_hl"], safety=safety)
     build_evidence(wb, data, fmts)
     wb.close()
 
@@ -775,6 +848,9 @@ def main():
     ap.add_argument("--review-type", default=None, help="review type filter")
     ap.add_argument("--year-from", default=None, help="year from")
     ap.add_argument("--year-to", default=None, help="year to")
+    ap.add_argument("--safety", action="store_true",
+                    help="emit the Safety-Related sheet (CSM subset); "
+                         "otherwise the workbook keeps only 3 data sheets")
     args = ap.parse_args()
     with open(args.in_json, encoding="utf-8") as f:
         data = json.load(f)
@@ -785,7 +861,7 @@ def main():
             "year_from": args.year_from,
             "year_to": args.year_to,
         }
-    export_workbook(data, args.out, lang=args.lang)
+    export_workbook(data, args.out, lang=args.lang, safety=args.safety)
     print("[OK] wrote", args.out)
 
 
