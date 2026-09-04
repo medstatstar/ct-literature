@@ -398,7 +398,8 @@ def _build_decision_map(decisions):
     return mp
 
 
-def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=None):
+def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=None,
+                       decision_options=None):
     cols = _WORKS_COLS
     has_dec = bool(decision_map)
     # 决策列（可选）：仅在传入 decisions 时出现，避免影响普通检索导出
@@ -448,16 +449,32 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=Non
             ci0 = len(cols)
             ws.write(ri, ci0, dec or "", base)
             ws.write(ri, ci0 + 1, reason or "", base)
+    # 裁决列加下拉列表（仅当调用方显式传入选项时）：人工在 Excel 里逐条选
+    # 纳入/排除/低置信，避免手打错字；空单元格（未裁决）放行。
+    # 双标签（中文 + 英文 internal）兼容预填的英文 internal 值，不触发校验红标。
+    # decision_options 由 meta-analysis 传入（与其 _DECISION_ALIAS 口径一致），
+    # 共享模块本身不持有裁决语义。
+    if has_dec and works and decision_options:
+        col = len(cols)  # 裁决列索引
+        ws.data_validation(start_row + 1, col, start_row + len(works), col, {
+            "validate": "list",
+            "source": list(decision_options),
+            "ignore_blank": True,
+            "show_error": True,
+            "error_title": "裁决取值",
+            "error_message": "请从下拉选择：纳入 / 排除 / 低置信",
+        })
     return len(works)
 
 
-def build_works(wb, data, fmts, safety_hl, decisions=None):
+def build_works(wb, data, fmts, safety_hl, decisions=None, decision_options=None):
     ws = wb.add_worksheet(t("sheet.works"))
     _page_decor(ws, t("sheet.works"), fmts)
     ws.set_tab_color(BLUE)
     works = data.get("works") or []
     dmap = _build_decision_map(decisions) if decisions else None
-    n = _write_works_table(ws, works, fmts, safety_hl, decision_map=dmap)
+    n = _write_works_table(ws, works, fmts, safety_hl, decision_map=dmap,
+                           decision_options=decision_options)
     ws.freeze_panes(1, 0)
     ncols = len(_WORKS_COLS) + (2 if dmap else 0)
     if works:
@@ -804,7 +821,8 @@ def sanitize(data):
     return data
 
 
-def export_workbook(data, out_path, lang="auto", safety=False, decisions=None):
+def export_workbook(data, out_path, lang="auto", safety=False, decisions=None,
+                    decision_options=None):
     data = sanitize(data)
     # Promote provenance / verification blocks from `meta` when the caller passed
     # them nested (the pipeline passes {count, works, meta}); the standalone CLI
@@ -830,7 +848,8 @@ def export_workbook(data, out_path, lang="auto", safety=False, decisions=None):
                                        "text_wrap": True})
     build_readme(wb, data, fmts)
     build_overview(wb, data, fmts)
-    build_works(wb, data, fmts, fmts["safety_hl"], decisions=decisions)
+    build_works(wb, data, fmts, fmts["safety_hl"], decisions=decisions,
+                decision_options=decision_options)
     # Safety-Related sheet is opt-in: only when --safety (CSM subset) is requested.
     # A plain literature search keeps the workbook to 3 sheets (README / Overview /
     # Works / Evidence Log) — the safety subset is NOT a default deliverable.
