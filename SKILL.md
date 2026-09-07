@@ -5,9 +5,9 @@ displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
 version: 1.0.0
 invocable: true
-summary: 检索公开学术文献（OpenAlex + Europe PMC + 预印本 + arXiv），归一化合并为证据基础与 CSM 定性安全性文献集，含工作台对话界面与 PDF 直链解码。
+summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，协助提供OA文献PDF下载。
 license: MIT
-description: "Search public scholarly literature (OpenAlex as primary source + Europe PMC/MeSH biomedical precision [on by default] + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize and de-duplicate it into one evidence base plus a qualitative CSM safety-literature subset; ships an optional local English→Chinese abstract term-annotation tool (term-level substitution, not full-text translation); clinical guidelines via a LOCAL corpus spanning 12+ sources. (Semantic Scholar is an explicit opt-in source requiring --with-semantic-scholar + key, not part of the default data sources.) / 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集，附带可选英文→中文摘要术语标注工具（本地、术语级替换，非全文翻译）；临床指南 12+ 源「本地语料库」模式。（Semantic Scholar 为显式可选源，需 --with-semantic-scholar + key，不纳入默认数据源）"
+description: "Search public scholarly literature (OpenAlex as primary source + Europe PMC / MeSH biomedical precision [on by default] + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize and de-duplicate the results, and assist in downloading open-access (OA) paper PDFs. / 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，协助提供OA文献PDF下载。"
 triggers:
   - "systematic literature search"
   - "系统文献检索"
