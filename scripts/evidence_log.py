@@ -15,6 +15,7 @@ The same dict is consumed by export_xlsx.build_evidence() for the Excel sheet.
 Pure stdlib; no network. Mirror the SAFE PREVIEW contract: only built when the
 pipeline actually ran (payloads populated).
 """
+import argparse
 import json
 import os
 from datetime import datetime

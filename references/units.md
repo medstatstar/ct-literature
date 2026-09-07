@@ -67,4 +67,4 @@ input(topic [+ review_type + year + safety])
    ct-literature → ct-pipeline / ct-protocol / ct-csr
 ```
 
-> OpenAlex is the sole REQUIRED source (U1→U4→U5 always works). U2/U3 are optional enrichments; U3 degrades gracefully. All computation local; ordinary input + public retrieval (B-tier).
+> OpenAlex is the sole REQUIRED source (U1→U4→U5 always works). U2/U3 are optional enrichments; U3 degrades gracefully. All computation local; ordinary input + public retrieval (A-tier).

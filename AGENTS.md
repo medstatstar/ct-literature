@@ -1,6 +1,8 @@
 # AGENTS.md · ct-literature
 
-> B-tier public-intel skill of the `ct-` library. Systematic literature search (published-evidence base + CSM qualitative subset).
+> A-tier public-intel skill of the `ct-` library (ct-base §11: A 档 = non-confidential input). Systematic literature search (published-evidence base + CSM qualitative subset).
+>
+> **Tier (ct-base §11, A/B two-tier):** this skill is **A 档 / A-tier** — its input is **non-confidential** (ordinary query terms only). Every data source is a public bibliographic API (OpenAlex / Europe PMC / preprint servers) and the skill processes **zero confidential input**. `network=public-retrieval` is an orthogonal sub-attribute of tier A (it answers "does the skill retrieve public sources?"), **not** a separate tier — ct-base now classifies skills on the single axis of input sensitivity (A = non-confidential / B = confidential).
 
 ## Scope
 
@@ -17,7 +19,7 @@
 
 - Scripts: stdlib `urllib` for fetch (no hard `requests` dependency in fetch path); `normalize.py` / `report.py` are pure local.
 - SAFE PREVIEW default: network runs only with `--run`.
-- Zero confidential data or information input (B-tier).
+- Zero confidential data or information input (A-tier).
 - Common files (`scripts/i18n.py`, `references/language_policy.md`, `references/report_template.md`) are copied from `ct-base` — do not fork them here; sync from ct-base instead. (`scripts/r_libs.py` was previously vendored but removed in v0.6.12 — this skill is pure Python and never calls R.)
 
 ## Self-improvement
@@ -27,4 +29,4 @@
 
 ## Version
 
-Current: v0.5.3 (B-tier public-intel literature search skill; aligned with SKILL.md).
+Current: v0.9.7 (A-tier public-intel literature search skill; aligned with SKILL.md). See SKILL.md `version:` for the authoritative number.

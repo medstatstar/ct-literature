@@ -12,11 +12,15 @@ invoked; the screen is a machine first-pass only.
 It writes a `prisma` block into .merged.json and annotates each work with
 `prisma_stage` / `prisma_included` / `prisma_reason`.
 
-PRISMA-2020 four-stage funnel produced:
+PRISMA-2020 funnel produced:
   1. identified_records  — total works retrieved & de-duplicated
   2. screened_records    — title/abstract screened (here = all identified)
   3. excluded_records    — excluded at title/abstract by rule, with reasons
   4. included_records    — passed the screen
+  5. duplicates_removed  — (NEW) records collapsed by upstream cross-source
+                            de-duplication; surfaced so the downstream PRISMA
+                            funnel can fill "duplicates removed (n=…)".
+                            `None` when the merge step did not report it.
 
 IMPORTANT: this is a *machine* screen. The report must declare
 「机器初筛，非人工终审 / Machine screen — not a substitute for human final review」.
@@ -102,10 +106,15 @@ def _passes_screen(work, topic_tokens, review_type, safety):
     return True, None
 
 
-def screen(works, topic="", review_type="all", safety=False):
+def screen(works, topic="", review_type="all", safety=False,
+            duplicates_removed=None):
     """Return {'works': annotated, 'prisma': {...}}.
 
     Incremental-compatible: original fields preserved; only prisma_* keys added.
+
+    `duplicates_removed` (int|None): number of records collapsed by the upstream
+    cross-source de-duplication (normalize.merge). Recorded in the prisma block so
+    the downstream PRISMA-2020 funnel can fill its "duplicates removed (n=…)" box.
     """
     topic_tokens = _topic_tokens(topic)
     annotated = []
@@ -133,6 +142,7 @@ def screen(works, topic="", review_type="all", safety=False):
     excluded = identified - included
     prisma = {
         "schema": "PRISMA-2020 (machine title/abstract screen, rule-based)",
+        "duplicates_removed": duplicates_removed,
         "stages": [
             {"stage": "identified_records",
              "label": "Records identified (retrieved & de-duplicated)",

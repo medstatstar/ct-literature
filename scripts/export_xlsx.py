@@ -8,8 +8,9 @@ Sheets (names localized):
                           + search scope + field dictionary + data caveats
   2. Overview           - distribution blocks (year col chart; source/type/study_type
                           pies) + top-cited list; charts floated right (col E), no overlap
-  3. Works              - unified literature table; title + url hyperlinked;
-                           safety-relevant rows (is_safety) highlighted amber
+  3. Works              - unified literature table; title hyperlinked to DOI
+                          (url fallback; the standalone Link column was removed
+                          2026-09-04); safety-relevant rows highlighted amber
   4. Safety-Related     - filtered subset where is_safety is true
 
 Rendering standard: scripts/excel_style.py (vendored from ct-base/scripts/excel_style.py)
@@ -95,6 +96,7 @@ _LOCAL = {
     "prov.source":     {"en": "Sources", "zh": "数据来源"},
     "col.source":      {"en": "Source", "zh": "来源"},
     "col.doi":         {"en": "DOI", "zh": "DOI"},
+    "col.oa_flag":     {"en": "OA", "zh": "开放获取"},
     "col.year":        {"en": "Year", "zh": "年份"},
     "col.title":       {"en": "Title", "zh": "标题"},
     "col.authors":     {"en": "Authors", "zh": "作者"},
@@ -103,9 +105,11 @@ _LOCAL = {
     "col.study_type":  {"en": "Study type", "zh": "研究类型"},
     "col.cited":       {"en": "Cited by", "zh": "被引"},
     "col.is_safety":   {"en": "Safety", "zh": "安全性"},
-    "col.url":         {"en": "Link", "zh": "链接"},
-    "col.oa":          {"en": "Open Access", "zh": "开放获取链接"},
+    "col.decision":    {"en": "Decision", "zh": "裁决"},
+    "col.reason":      {"en": "Reason", "zh": "理由"},
+    "col.oa":          {"en": "OA link", "zh": "OA链接"},
     "col.abstract":    {"en": "Abstract", "zh": "摘要"},
+    "col.pdf_path":    {"en": "PDF Path", "zh": "PDF 本地路径"},
     "col.mesh":        {"en": "MeSH", "zh": "MeSH"},
     "col.funders":     {"en": "Funders", "zh": "资助方"},
     "col.count":       {"en": "Count", "zh": "数量"},
@@ -134,7 +138,8 @@ _LOCAL = {
     "field.mean":      {"en": "Meaning", "zh": "含义"},
     "f.source":        {"en": "Source repository (OpenAlex / Europe PMC / Semantic Scholar)",
                        "zh": "文献来源库（OpenAlex / Europe PMC / Semantic Scholar）"},
-    "f.title":         {"en": "Work title (click the link to open)", "zh": "文献标题（点击链接可访问）"},
+    "f.title":         {"en": "Work title (hyperlinked to its DOI — click to open)",
+                        "zh": "文献标题（已超链接至 DOI，点击可访问）"},
     "f.authors":       {"en": "Author list (first 6)", "zh": "作者列表（前 6 位）"},
     "f.year":          {"en": "Publication year", "zh": "发表年份"},
     "f.publication":   {"en": "Journal / venue", "zh": "发表期刊 / 会议"},
@@ -143,7 +148,13 @@ _LOCAL = {
     "f.cited":         {"en": "Citation count", "zh": "被引次数"},
     "f.is_safety":     {"en": "Safety-related flag (Y / —, amber-highlighted in the table)",
                        "zh": "是否安全性相关（Y / —，表中琥珀色高亮）"},
-    "f.url":           {"en": "Link to the original / DOI", "zh": "原文 / DOI 链接"},
+    "f.oa_flag":       {"en": "Open-access flag: Y = OA full text available (verified via "
+                             "OpenAlex open_access.is_oa + OA locations, NOT inferred from links); "
+                             "bioRxiv/medRxiv/arXiv = preprint candidate (author-verified, "
+                             "--preprint-fallback opt-in); — = no OA and no preprint.",
+                       "zh": "是否开放获取：Y = 有 OA 全文（经 OpenAlex open_access.is_oa + OA "
+                             "location 校验，非由链接有无推断）；bioRxiv/medRxiv/arXiv = 预印本候选"
+                             "（经作者姓氏同篇校验，--preprint-fallback 开启时生成）；— = 无 OA 且无预印本。"},
     "f.abstract":      {"en": "Abstract snippet (for judging relevance before download)",
                        "zh": "摘要片段（用于下载前判断相关性）"},
     "f.mesh":          {"en": "MeSH terms (Europe PMC)", "zh": "医学主题词（Europe PMC）"},
@@ -182,8 +193,8 @@ _LOCAL = {
     "ev.retrieved":    {"en": "Retrieved", "zh": "检索时间"},
     "ev.status":       {"en": "Status", "zh": "状态"},
     "ev.note":         {"en": "Provenance audit trail (ct-base §17.1): every evidence item is traceable to its source query and retrieval time. Verification status is advisory, not a substitute for human review.",
-    "cfg.degraded":     {"en": "Degraded sources", "zh": "降级数据源"},
                        "zh": "证据溯源审计（ct-base §17.1）：每条证据可回溯至来源检索式与检索时间；验证状态仅供参考，不替代人工核查。"},
+    "cfg.degraded":     {"en": "Degraded sources", "zh": "降级数据源"},
 }
 
 
@@ -319,7 +330,8 @@ def build_readme(wb, data, fmts):
         ("col.authors", "f.authors"), ("col.year", "f.year"),
         ("col.publication", "f.publication"), ("col.type", "f.type"),
         ("col.study_type", "f.study_type"), ("col.cited", "f.cited"),
-        ("col.is_safety", "f.is_safety"), ("col.url", "f.url"),
+        ("col.is_safety", "f.is_safety"),
+        ("col.oa_flag", "f.oa_flag"),
         ("col.abstract", "f.abstract"),
         ("col.mesh", "f.mesh"), ("col.funders", "f.funders"),
     ]
@@ -349,19 +361,91 @@ def build_readme(wb, data, fmts):
 # Safety-Related sheet so headers, widths (incl. the OA column) and autofilter
 # never drift apart (2026-08-15: Safety sheet was missing autofilter and the
 # OA column width, causing header-wrap).
-_WORKS_COLS = [("source", t("col.source"), 14),
-               ("doi", t("col.doi"), 22),
-               ("year", t("col.year"), 8),
-               ("title", t("col.title"), 52),
-               ("authors", t("col.authors"), 34),
-               ("publication", t("col.publication"), 26),
-               ("type", t("col.type"), 14),
-               ("study_type", t("col.study_type"), 20),
-               ("cited_by_count", t("col.cited"), 10),
-               ("is_safety", t("col.is_safety"), 10),
-               ("url", t("col.url"), 22),
-               ("open_access_url", t("col.oa"), 28),
-               ("abstract_snippet", t("col.abstract"), 60)]
+
+_ABS_SECTION_RE = None  # lazy import re
+
+
+def restore_abstract_paragraphs(text):
+    """Structured abstracts arrive as a single flat string from Europe PMC /
+    OpenAlex (verified: source abstractText contains NO line breaks). Restore
+    paragraph breaks heuristically at the classic section labels that medical
+    abstracts begin paragraphs with — BACKGROUND / OBJECTIVE / METHODS /
+    RESULTS / CONCLUSIONS: etc. Free-form narrative abstracts (no labels) are
+    returned unchanged. Paragraph text itself is never modified.
+    Placeholder abstracts (e.g. "How to cite", too short) return "—".
+    """
+    s = (text or "").strip()
+    if not s:
+        return "—"
+    if len(s) < 20:
+        return "—"
+    # Check for known placeholder patterns
+    import re as _re
+    # Normalize: lowercase, strip punctuation, check against known placeholders
+    normalized = _re.sub(r"[\s\[\]\(\)\{\}]+", " ", s.lower()).strip()
+    placeholders = {
+        "how to cite", "how to cite.", "[abstract unavailable]",
+        "abstract not available", "no abstract available", "[no abstract]",
+        "abstract:", "summary:", "abstract available", "unavailable",
+        "abstract not provided", "not available", "n/a", "abstract not avail"
+    }
+    if normalized in placeholders:
+        return "—"
+    # Check if it looks like a placeholder (very short, starts with "[abstract" or "abstract")
+    if len(s) < 30 and normalized.startswith(("abstract", "[abstract", "no abstract", "abstract not")):
+        return "—"
+    import re as _re
+    global _ABS_SECTION_RE
+    if _ABS_SECTION_RE is None:
+        _ABS_SECTION_RE = _re.compile(
+            r"(?i)(?<![A-Za-z0-9])(?:BACKGROUND AND OBJECTIVE|BACKGROUND|OBJECTIVE|"
+            r"PURPOSE|INTRODUCTION|AIM|METHODS|MATERIALS AND METHODS|PATIENTS AND "
+            r"METHODS|METHODOLOGY|RESULTS|FINDINGS|CONCLUSIONS?|DISCUSSION|TRIAL "
+            r"REGISTRATION)\s*:")
+    matches = list(_ABS_SECTION_RE.finditer(s))
+    if len(matches) < 2:
+        return s  # nothing to section-ise
+    out = []
+    prev = 0
+    for m in matches:
+        if m.start() <= 2:
+            continue  # label at the very start — already a paragraph head
+        seg = s[prev:m.start()].rstrip()
+        if seg:
+            out.append(seg)
+            out.append("\n\n")
+        prev = m.start()
+    out.append(s[prev:].lstrip())
+    return "".join(out)
+
+
+# 2026-09-04 reorder (v2, per user): Type → Study type → Year → Journal →
+# Authors → Title (hyperlinked to https://doi.org/<doi>, fallback url) →
+# Abstract → DOI → Cited by → Safety → OA PDF. The standalone "Link" (url)
+# column was removed — the title itself carries the DOI link now.
+# 2026-09-06 (v3, per user): DOI column removed (title already hyperlinks to
+# it); the standalone "OA" flag column removed as redundant with the link
+# column, which is renamed "OA链接 / OA link". Column widths re-tuned.
+# NOTE: meta-analysis A3 upload parsing (parse_screening_xlsx) locates columns
+# BY HEADER NAME, not position, so this reorder is safe for the round-trip.
+# IMPORTANT: headers are resolved via t() at WRITE time, not import time —
+# resolving at import froze them to English because set_lang() runs later
+# (this was the root cause of "bilingual headers never switch").
+_WORKS_COLS = [("type", "col.type", 12),
+               ("study_type", "col.study_type", 18),
+               ("year", "col.year", 7),
+               ("publication", "col.publication", 22),
+               ("authors", "col.authors", 30),
+               ("title", "col.title", 50),
+               ("abstract_snippet", "col.abstract", 62),
+               ("cited_by_count", "col.cited", 9),
+               ("is_safety", "col.is_safety", 9),
+               ("open_access_url", "col.oa", 24),
+               ("local_pdf_path", "col.pdf_path", 36)]
+
+
+def _works_header(key_label):
+    return t(key_label)
 
 
 def _norm_doi(doi):
@@ -403,11 +487,11 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=Non
     cols = _WORKS_COLS
     has_dec = bool(decision_map)
     # 决策列（可选）：仅在传入 decisions 时出现，避免影响普通检索导出
-    extra = [("decision", "裁决", 12), ("reason", "理由", 40)] if has_dec else []
+    extra = [("decision", "col.decision", 12), ("reason", "col.reason", 40)] if has_dec else []
     all_cols = cols + extra
     ws.set_row(start_row, HEADER_H)
-    for ci, (_, h, _) in enumerate(all_cols):
-        ws.write(start_row, ci, h, fmts["header"])
+    for ci, (_, hkey, _) in enumerate(all_cols):
+        ws.write(start_row, ci, t(hkey), fmts["header"])
     for ri, w in enumerate(works, start=start_row + 1):
         zebra = ((ri - start_row - 1) % 2 == 1)
         base = fmts["zebra"] if zebra else fmts["plain"]
@@ -419,25 +503,67 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=Non
                 av = v if isinstance(v, list) else [str(v)]
                 ws.write(ri, ci, ", ".join(av)[:120], row_fmt)
             elif key == "title":
-                ws.write(ri, ci, (v or "")[:240], row_fmt)
+                tstr = (v or "")[:240]
+                # 2026-09-04: title cell itself becomes the hyperlink —
+                # DOI link first (https://doi.org/<doi>), fallback to url.
+                link = _normalize_link(w.get("doi")) or _normalize_link(w.get("url"))
+                if link and tstr:
+                    ws.write_url(ri, ci, link, fmts["link"], string=tstr)
+                else:
+                    ws.write(ri, ci, tstr, row_fmt)
             elif key == "is_safety":
                 ws.write(ri, ci, "Y" if v else "—",
                          fmts["center"] if not w.get("is_safety") else safety_hl)
-            elif key == "url":
-                link = _normalize_link(v)
-                if link:
-                    ws.write_url(ri, ci, link, fmts["link"], string=str(v)[:42])
+
+            elif key == "is_oa":
+                pp = w.get("preprint") if isinstance(w.get("preprint"), dict) else None
+                if v:
+                    ws.write(ri, ci, "Y", fmts["oa_yes"])
+                elif pp:
+                    venue = str(pp.get("venue") or "preprint")
+                    label = {"biorxiv": "bioRxiv", "medrxiv": "medRxiv",
+                             "biorxiv_medrxiv": "bioRxiv/medRxiv",
+                             "arxiv": "arXiv"}.get(venue, venue)
+                    ws.write(ri, ci, label, fmts["preprint_tag"])
                 else:
-                    ws.write(ri, ci, str(v)[:42] if v else "", row_fmt)
+                    ws.write(ri, ci, "—", fmts["center"])
             elif key == "open_access_url":
                 oa = _normalize_link(v)
+                # 开放获取链接：OA URL 优先；无 OA 但有预印本候选时降级到预印本链接
+                # （venue 标签如 "OA PDF / medRxiv" 区分发表版与预印本）
+                pp = w.get("preprint") if isinstance(w.get("preprint"), dict) else None
                 if oa:
                     ws.write_url(ri, ci, oa, fmts["link"], string="OA PDF")
+                elif pp:
+                    pp_url = _normalize_link(pp.get("url") or (
+                        ("https://doi.org/" + pp["doi"]) if pp.get("doi") else ""))
+                    venue = str(pp.get("venue") or "preprint")
+                    label = {"biorxiv": "bioRxiv", "medrxiv": "medRxiv",
+                             "biorxiv_medrxiv": "bioRxiv/medRxiv",
+                             "arxiv": "arXiv"}.get(venue, venue)
+                    if pp_url:
+                        ws.write_url(ri, ci, pp_url, fmts["link"], string=label)
+                    else:
+                        ws.write(ri, ci, label, row_fmt)
                 else:
                     ws.write(ri, ci, "—", row_fmt)
             elif key == "abstract_snippet":
-                # 摘要片段截断展示，避免超长文本撑爆单元格
-                ws.write(ri, ci, (v or "")[:500], row_fmt)
+                # 完整摘要（text_wrap 由 zebra/plain 格式承载；行高在行尾自适应）；
+                # 按医学摘要段首标签恢复分段（源为单段文本）
+                ws.write(ri, ci, restore_abstract_paragraphs(v or ""), row_fmt)
+            elif key == "local_pdf_path":
+                # PDF 本地路径：下载成功 → 纯文本完整绝对路径（os.path.normpath 统一
+                # Windows 反斜杠；不加 file:// 超链 —— xlsxwriter 会把 file URL 转回
+                # 反斜杠存储、预览面板又会把它当网络链接渲染成 https/file，纯文本
+                # 路径最稳妥，可复制到资源管理器直接打开）。
+                # 失败/无 OA 直链 → 统一显示「失败」。
+                from pathlib import Path
+                if v and Path(str(v)).is_file():
+                    ws.write(ri, ci, os.path.normpath(str(v)), row_fmt)
+                elif w.get("pdf_download_note"):
+                    ws.write(ri, ci, "失败", fmts["center"])
+                else:
+                    ws.write(ri, ci, "—", fmts["center"])
             elif key == "cited_by_count":
                 ws.write(ri, ci, v if v is not None else 0, fmts["right"])
             else:
@@ -449,6 +575,17 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=Non
             ci0 = len(cols)
             ws.write(ri, ci0, dec or "", base)
             ws.write(ri, ci0 + 1, reason or "", base)
+        # 行高自适应：按摘要（主）与标题（次）的估算折行数设置行高，默认展开约 5 行
+        # —— 摘要文本始终完整写入（text_wrap），更长内容在 Excel 中双击该行头
+        # 下边界（自动适应行高）或手动拖高即可查看全文，避免每行撑满半屏。
+        est = 1
+        alen = len((w.get("abstract_snippet") or "").strip())
+        if alen:
+            est = max(est, (alen + 55) // 56)
+        tlen = len((w.get("title") or "").strip())
+        if tlen:
+            est = max(est, (tlen + 42) // 43)
+        ws.set_row(ri, min(13.5 * est, 68))
     # 裁决列加下拉列表（仅当调用方显式传入选项时）：人工在 Excel 里逐条选
     # 纳入/排除/低置信，避免手打错字；空单元格（未裁决）放行。
     # 双标签（中文 + 英文 internal）兼容预填的英文 internal 值，不触发校验红标。
@@ -803,6 +940,7 @@ def sanitize(data):
         w = dict(w)
         w["year"] = _coerce_int(w.get("year"))
         w["cited_by_count"] = _coerce_int(w.get("cited_by_count")) or 0
+        w["is_oa"] = bool(w.get("is_oa"))
         srcs = w.get("sources")
         if not isinstance(srcs, (list, tuple)) or not srcs:
             srcs = [w.get("source")]
@@ -846,6 +984,17 @@ def export_workbook(data, out_path, lang="auto", safety=False, decisions=None,
                                        "border_color": GRID, "font_name": FONT,
                                        "font_size": 10, "valign": "top",
                                        "text_wrap": True})
+    # OA=Y cell (green tint, same family as the zebra light but readable as "yes")
+    fmts["oa_yes"] = wb.add_format({"bg_color": "#CDEBD6", "border": 1,
+                                    "border_color": GRID, "font_name": FONT,
+                                    "font_size": 10, "align": "center",
+                                    "valign": "vcenter"})
+    # Preprint tag in the OA column (amber, distinct from the green Y)
+    fmts["preprint_tag"] = wb.add_format({"bg_color": "#FFF2CC", "border": 1,
+                                          "border_color": GRID, "font_name": FONT,
+                                          "font_size": 10, "align": "center",
+                                          "valign": "vcenter", "bold": True,
+                                          "font_color": "#BF9000"})
     build_readme(wb, data, fmts)
     build_overview(wb, data, fmts)
     build_works(wb, data, fmts, fmts["safety_hl"], decisions=decisions,

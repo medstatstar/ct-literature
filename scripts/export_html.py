@@ -12,7 +12,7 @@ Usage:
     python export_html.py --in-json ../out_live/.merged.json \
                           --out ../out_live/lit_report.html --lang zh
 """
-import os, sys, json, html, argparse, datetime
+import os, sys, json, html, argparse, datetime, itertools, math, os.path, re, ast
 from collections import Counter
 
 # IMPORTANT (2026-08-11): ct-base is NEVER published. Every ct- skill must carry
@@ -21,6 +21,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import excel_style as X
+from export_xlsx import restore_abstract_paragraphs
 
 PALETTE = X.PALETTES["literature"]
 
@@ -31,12 +32,19 @@ _LABELS = {
         "search.topic": "Search Topic", "search.keywords": "Generated Keywords",
         "search.filter": "Filter", "search.none": "—",
         "kpi.year": "Year Span", "kpi.topcited": "Top Cited",
-        "works": "Works", "col.source": "Source", "col.id": "ID", "col.title": "Title",
+        "works": "Works", "col.source": "Source", "col.id": "ID", "col.srcid": "Source / ID", "col.title": "Title",
         "col.authors": "Authors", "col.year": "Year", "col.pub": "Publication",
         "col.type": "Type", "col.study": "Study", "col.cited": "Cited", "col.link": "Link",
         "col.oa": "Open Access",
+        "col.pdf": "PDF",
         "col.abstract": "Abstract", "overview": "Overview", "by_src": "By Source",
         "by_type": "By Type", "by_year": "By Year", "safety": "Safety / CSM Subset",
+        "abs.more": "Show full abstract ▾", "abs.less": "Collapse ▴",
+        "tips.title": "Need more? / Options",
+        "tips.t1": "Excel workbook is the complete result — keep analysing / filtering it on top.",
+        "tips.t2": "PDF downloads on request — ALL OA records, specific DOI / PMID(s), or the top N (legal OA sources only).",
+        "tips.t3": "Citation formats (Zotero RIS / BibTeX / APA …) can be generated for download on request.",
+        "tips.t4": "Not sure about an add-on? Say “menu” in the chat and I will walk you through the choices.",
         "evidence": "Evidence & Verification", "ev.verify": "Citation verification",
         "ev.verified": "Verified", "ev.bot_blocked": "Bot-blocked",
         "ev.bot_blocked.note": "publisher returned 403 to automated access — DOI is real, not a broken link",
@@ -50,6 +58,14 @@ _LABELS = {
         "ev.preview": "preview — skipped", "ev.src": "Source", "ev.query": "Query",
         "ev.type": "Type", "ev.year": "Year", "ev.safety": "Safety",
         "ev.count": "Count", "ev.retrieved": "Retrieved", "ev.status": "Status",
+        "net.title": "Concept Co-occurrence Network",
+        "net.note": ("Node = keyword / concept (size = co-occurrence degree, top 25); "
+                     "edge = two terms co-occurring in >= 2 works (thicker = more). "
+                     "Deterministic circular layout — shows co-occurrence only, "
+                     "NOT a true clustering."),
+        "net.legend": "Co-occurrence",
+        "merge.title": "Living-review Delta",
+        "merge.new": "New", "merge.carry": "Carryover", "merge.retained": "Retained",
     },
     "zh": {
         "doc_title": "文献证据库",
@@ -57,12 +73,19 @@ _LABELS = {
         "search.topic": "检索主题", "search.keywords": "生成关键字",
         "search.filter": "筛选条件", "search.none": "—",
         "kpi.year": "年份跨度", "kpi.topcited": "最高被引",
-        "works": "文献列表", "col.source": "来源", "col.id": "ID", "col.title": "标题",
+        "works": "文献列表", "col.source": "来源", "col.id": "ID", "col.srcid": "来源 / ID", "col.title": "标题",
         "col.authors": "作者", "col.year": "年份", "col.pub": "期刊",
         "col.type": "类型", "col.study": "研究类型", "col.cited": "被引", "col.link": "链接",
-        "col.oa": "开放获取链接",
+        "col.oa": "OA链接",
+        "col.pdf": "PDF",
         "col.abstract": "摘要", "overview": "概览", "by_src": "按来源", "by_type": "按类型",
         "by_year": "按年份", "safety": "安全性 / CSM 子集",
+        "abs.more": "点击展开全部摘要 ▾", "abs.less": "收起 ▴",
+        "tips.title": "还能做什么？",
+        "tips.t1": "Excel 报告是完整结果（全部记录 + 全字段），可在此基础上继续筛选 / 透视等进一步处理。",
+        "tips.t2": "需要 PDF？可协助下载：全部 OA 记录、指定 DOI/PMID、或前 N 篇（仅从合法 OA 源尝试）。",
+        "tips.t3": "可按需生成并下载 Zotero(RIS) / BibTeX / APA 等引文格式。",
+        "tips.t4": "不确定如何选用附加功能？对话中呼叫「菜单」，我列出选项供你选择。",
         "evidence": "证据溯源与引文验证", "ev.verify": "引文验证",
         "ev.verified": "已验证", "ev.bot_blocked": "出版社拦爬",
         "ev.bot_blocked.note": "出版社对自动化访问回 403 —— DOI 真实有效、非断链",
@@ -75,12 +98,55 @@ _LABELS = {
         "ev.preview": "预览，已跳过", "ev.src": "来源", "ev.query": "检索式",
         "ev.type": "类型", "ev.year": "年份", "ev.safety": "安全性",
         "ev.count": "数量", "ev.retrieved": "检索时间", "ev.status": "状态",
+        "net.title": "概念共现网络",
+        "net.note": ("节点 = 关键词 / 概念（大小 = 共现度，取前 25）；边 = 两个词在同一文献中"
+                     "共现 ≥ 2 次（越粗共现越多）。环形布局为确定性排布，仅表示共现，"
+                     "不代表真实聚类。"),
+        "net.legend": "共现",
+        "merge.title": "增量合并",
+        "merge.new": "新增", "merge.carry": "沿用", "merge.retained": "历史保留",
     },
 }
 
 
 def esc(v):
     return html.escape("" if v is None else str(v))
+
+
+def _short_id(v):
+    """Shorten a record id for the merged source·id cell: strip the scheme +
+    host so 'https://openalex.org/W3087210493' -> 'W3087210493' and a DOI URL
+    keeps its '10.xxxx/...' form; numeric/plain ids pass through."""
+    if not v:
+        return "—"
+    s = str(v).strip().rstrip("/")
+    m = re.match(r"^https?://[^/]+/(.*)$", s)
+    return m.group(1) if m else s
+
+
+def _fmt_authors(v, max_n=4):
+    """Authors arrive as a list (or its repr / JSON string). Parse and render
+    as 'A, B, C et al.'; max_n=0/None returns the full list for tooltips."""
+    if not v:
+        return "—"
+    if isinstance(v, str):
+        s = v.strip()
+        if s.startswith("["):
+            try:
+                v = ast.literal_eval(s)
+            except Exception:
+                try:
+                    v = json.loads(s)
+                except Exception:
+                    return s
+    if isinstance(v, (list, tuple)):
+        names = [str(x) for x in v if str(x).strip()]
+        if not names:
+            return "—"
+        if max_n and len(names) > max_n:
+            return ", ".join(names[:max_n]) + " et al."
+        return ", ".join(names)
+    return str(v)
 
 
 def _html_link(u):
@@ -159,7 +225,128 @@ def prisma_funnel_svg(prisma, P):
     return "".join(svg)
 
 
-def render(data, lang):
+def _work_terms(w):
+    """Terms of one work: keywords + concepts, de-duplicated (case-insensitive).
+
+    Concepts may arrive as plain strings or as OpenAlex-style dicts
+    ({"display_name": ...}); export_xlsx.sanitize() may already have stringified
+    them, so both shapes are handled.
+    """
+    raw = []
+    for fld in ("keywords", "concepts"):
+        for c in (w.get(fld) or []):
+            if isinstance(c, dict):
+                t = c.get("display_name") or c.get("name") or c.get("keyword") or ""
+            else:
+                t = c
+            t = str(t or "").strip()
+            if t:
+                raw.append(t)
+    seen, out = set(), []
+    for t in raw:
+        k = t.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(t)
+    return out
+
+
+def concept_network_svg(works, P, top_n=25, min_edge=2):
+    """Inline SVG concept co-occurrence network (stdlib only). Returns '' if too sparse.
+
+    Deterministic by construction: nodes are ranked by (-degree, -frequency, term) and
+    laid out on a circle from a fixed start angle — the same input set always yields a
+    byte-identical SVG regardless of work ordering, so a living-review re-run does not
+    produce report diff noise.
+
+    Guards against SVG blow-up: at most `top_n` nodes and only edges with weight >=
+    `min_edge` are drawn; a work contributes a pair only once even if it repeats terms.
+    """
+    docs = []
+    for w in (works or []):
+        if not isinstance(w, dict):
+            continue
+        ts = _work_terms(w)
+        if len(ts) >= 2:
+            docs.append(ts)
+    if not docs:
+        return ""
+
+    freq, pairs, forms = Counter(), Counter(), {}
+    for ts in docs:
+        freq.update(ts)
+        for t in ts:
+            forms.setdefault(t.lower(), Counter())[t] += 1
+        for a, b in itertools.combinations(sorted(ts), 2):
+            pairs[(a, b)] += 1
+    # Sorted, not just filtered: Counter preserves insertion order, which would leak
+    # the work ordering into the SVG string and produce report diff noise between runs.
+    # Ascending weight also paints heavy edges last (on top of the light ones).
+    edges = sorted(((a, b, c) for (a, b), c in pairs.items() if c >= min_edge),
+                   key=lambda e: (e[2], e[0], e[1]))
+    if not edges:
+        return ""
+    # display form per canonical (lower-cased) key: most frequent spelling wins, ties
+    # broken lexicographically -> stable under input reordering.
+    disp = {k: min(c.items(), key=lambda kv: (-kv[1], kv[0]))[0] for k, c in forms.items()}
+
+    deg = Counter()
+    for a, b, _c in edges:
+        deg[a] += 1
+        deg[b] += 1
+    nodes = sorted(deg, key=lambda t: (-deg[t], -freq.get(t, 0), t))[:max(1, top_n)]
+    keep = set(nodes)
+    edges = [(a, b, c) for (a, b, c) in edges if a in keep and b in keep]
+    if not edges or len(nodes) < 2:
+        return ""
+
+    W, H = 760, 520
+    cx, cy, R = W / 2.0, 244.0, 180.0
+    n = len(nodes)
+    maxdeg = max(deg.values()) or 1
+    maxw = max(c for _a, _b, c in edges) or 1
+    pos = {}
+    for i, t in enumerate(nodes):
+        ang = -math.pi / 2 + 2 * math.pi * i / n   # deterministic: start at 12 o'clock
+        pos[t] = (cx + R * math.cos(ang), cy + R * math.sin(ang), ang)
+
+    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
+           f'width="100%" role="img" aria-label="Concept co-occurrence network">',
+           f'<rect x="0" y="0" width="{W}" height="{H}" fill="#ffffff"/>']
+    # edges first so nodes paint on top
+    for a, b, c in edges:
+        x1, y1, _ = pos[a]
+        x2, y2, _ = pos[b]
+        w_ratio = c / float(maxw)
+        svg.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+                   f'stroke="{P["blue"]}" stroke-width="{0.8 + 2.6 * w_ratio:.2f}" '
+                   f'stroke-opacity="{0.16 + 0.44 * w_ratio:.2f}"/>')
+    for t in nodes:
+        x, y, ang = pos[t]
+        r = 7.0 + 13.0 * math.sqrt(deg[t] / float(maxdeg))
+        svg.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r:.1f}" fill="{P["navy"]}" '
+                   f'fill-opacity="0.88" stroke="#ffffff" stroke-width="1.5"/>')
+        label = disp.get(t.lower(), t)
+        if len(label) > 14:
+            label = label[:13] + "\u2026"
+        lx = x + (r + 11) * math.cos(ang)
+        ly = y + (r + 11) * math.sin(ang)
+        if abs(math.cos(ang)) < 0.30:
+            anchor = "middle"
+        else:
+            anchor = "start" if math.cos(ang) > 0 else "end"
+        svg.append(f'<text x="{lx:.1f}" y="{ly + 3.5:.1f}" text-anchor="{anchor}" '
+                   f'font-size="10.5" font-family="sans-serif" '
+                   f'fill="{P["greytx"]}">{esc(label)}</text>')
+    svg.append(f'<text x="{W / 2.0:.0f}" y="{H - 12}" text-anchor="middle" font-size="11" '
+               f'font-family="sans-serif" fill="{P["greytx"]}">'
+               f'nodes={len(nodes)} · edges={len(edges)} · top_n={top_n} '
+               f'· min_edge={min_edge}</text>')
+    svg.append('</svg>')
+    return "".join(svg)
+
+
+def render(data, lang, safety=False):
     # resolve "auto" to a concrete language (mirrors ct-pipeline fix) — never
     # index _LABELS with the literal "auto" (KeyError).
     if lang == "auto":
@@ -208,17 +395,29 @@ def render(data, lang):
         search_chips.append(f'<span class="chip">{esc(L["search.keywords"])}: <b>{esc(_kw_str)}</b></span>')
     if _filter_str:
         search_chips.append(f'<span class="chip">{esc(L["search.filter"])}: <b>{esc(_filter_str)}</b></span>')
+    # living-review delta (only when this run was merged against a previous one)
+    _mg = meta.get("merge_existing")
+    if isinstance(_mg, dict):
+        search_chips.append(
+            f'<span class="chip">{esc(L["merge.title"])}: '
+            f'<b>{esc(L["merge.new"])}={_mg.get("new", 0)} · '
+            f'{esc(L["merge.carry"])}={_mg.get("carryover", 0)} · '
+            f'{esc(L["merge.retained"])}={_mg.get("retained_only", 0)}</b>'
+            f' (@{esc(_mg.get("stamp", ""))})</span>')
     searchinfo = ('<div class="searchinfo">' + "".join(search_chips) + "</div>") if search_chips else ""
 
     years = sorted({w.get("year") for w in works if w.get("year")})
     year_span = f"{years[0]}–{years[-1]}" if years else "—"
     top_cited = max((w.get("cited_by_count") or 0) for w in works) if works else 0
     n_safety = sum(1 for w in works if w.get("is_safety"))
+    n_pdf = sum(1 for w in works if w.get("local_pdf_path") and os.path.exists(w.get("local_pdf_path", "")))
+    n_oa = sum(1 for w in works if w.get("open_access_url"))
 
-    # KPI
-    kpis = [
-        (L["kpi.total"], str(total), ""),
-        (L["kpi.safety"], str(n_safety), esc(P["warn_bd"]) and ""),
+    # KPI (safety KPI card only under --safety; the works-table amber highlight stays always-on)
+    kpis = [(L["kpi.total"], str(total), "")]
+    if safety:
+        kpis.append((L["kpi.safety"], str(n_safety), ""))
+    kpis += [
         (L["kpi.year"], esc(year_span), ""),
         (L["kpi.topcited"], str(top_cited), ""),
     ]
@@ -227,6 +426,14 @@ def render(data, lang):
         f'<div class="kpi-val">{esc(val)}</div><div class="kpi-sub">{esc(sub)}</div></div>'
         for lbl, val, sub in kpis
     )
+    # "next steps" guidance strip shown to the end user on the report itself
+    tips_html = (f'<div class="tips"><div class="tips-title">{esc(L["tips.title"])}</div><ol>'
+                 f'<li>{esc(L["tips.t1"])}</li>'
+                 f'<li>{esc(L["tips.t2"])}</li>'
+                 f'<li>{esc(L["tips.t3"])}</li>'
+                 f'<li>{esc(L["tips.t4"])}</li></ol></div>')
+    # PDF 下载摘要
+    pdf_summary = f'<div class="pdf-summary" style="margin-top:12px;padding:10px 14px;background:#e8f8f0;border-radius:8px;font-size:13px;">✓ PDF 已下载: <b>{n_pdf}</b> / {total} ｜ OA 链接: <b>{n_oa}</b> / {total}</div>' if n_pdf > 0 else ""
 
     # distributions
     src_c = Counter(w.get("source") for w in works)
@@ -252,30 +459,64 @@ def render(data, lang):
         safe = w.get("is_safety")
         tr_cls = ' class="safety"' if safe else ""
         url = _html_link(w.get("url"))
-        link = f'<a href="{esc(url)}" target="_blank" rel="noopener">↗</a>' if url else "—"
+        # source and id merged into one cell as two stacked lines
+        # (database name on top, record id below); title itself links to the record
+        src_full = w.get("source") or "—"
+        rid = _short_id(w.get("id"))
+        srcid_full = src_full + " · " + (w.get("id") or "—")
+        srcid_html = (f'<span class="src">{esc(src_full)}</span>'
+                      f'<span class="rid">{esc(rid)}</span>')
+        title_html = (f'<a href="{esc(url)}" target="_blank" rel="noopener" title="{esc(w.get("title"))}">'
+                      f'{esc(w.get("title"))}</a>' if url else esc(w.get("title") or "—"))
         oa_url = _html_link(w.get("open_access_url"))
         oa_link = f'<a href="{esc(oa_url)}" target="_blank" rel="noopener">OA</a>' if oa_url else "—"
-        wrows += (f'<tr{tr_cls}><td>{esc(w.get("source"))}</td><td>{esc(w.get("id"))}</td>'
-                  f'<td>{esc(w.get("title"))}</td><td>{esc(w.get("authors"))}</td>'
+        # abstract: full snippet with section labels re-flowed to paragraphs
+        # (esc first, then newlines -> <br> so paragraph breaks survive HTML)
+        abs_txt = restore_abstract_paragraphs((w.get("abstract_snippet") or "").strip())
+        expandable = len(abs_txt) > 140
+        abs_html = esc(abs_txt or "—").replace("\n\n", "<br><br>").replace("\n", "<br>")
+        if expandable:
+            abs_cell = (f'<span class="clip">{abs_html}</span>'
+                        f'<span class="act" data-more="{esc(L["abs.more"])}" '
+                        f'data-less="{esc(L["abs.less"])}">{esc(L["abs.more"])}</span>')
+        else:
+            abs_cell = abs_html
+        auth_full = _fmt_authors(w.get("authors"), max_n=None)
+        auth_show = _fmt_authors(w.get("authors"), max_n=4)
+        wrows += (f'<tr{tr_cls}><td class="srcid" title="{esc(srcid_full)}">{srcid_html}</td>'
+                  f'<td class="title">{title_html}</td>'
+                  f'<td class="abs{" expandable" if expandable else ""}">{abs_cell}</td>'
+                  f'<td class="auths" title="{esc(auth_full)}">{esc(auth_show)}</td>'
                   f'<td class="num">{esc(w.get("year"))}</td><td>{esc(w.get("publication"))}</td>'
                   f'<td>{esc(w.get("type"))}</td><td>{esc(w.get("study_type"))}</td>'
-                  f'<td class="num">{esc(w.get("cited_by_count"))}</td><td>{link}</td>'
+                  f'<td class="num">{esc(w.get("cited_by_count"))}</td>'
                   f'<td>{oa_link}</td></tr>')
 
-    # safety subset
-    srows = ""
-    for w in works:
-        if not w.get("is_safety"):
-            continue
-        url = _html_link(w.get("url"))
-        link = f'<a href="{esc(url)}" target="_blank" rel="noopener">↗</a>' if url else "—"
-        abs_snip = (w.get("abstract_snippet") or "")[:220]
-        srows += (f'<tr><td>{esc(w.get("source"))}</td><td>{esc(w.get("title"))}</td>'
-                  f'<td class="num">{esc(w.get("year"))}</td><td>{esc(w.get("publication"))}</td>'
-                  f'<td>{esc(abs_snip)}{"…" if len(w.get("abstract_snippet") or "") > 220 else ""}</td>'
-                  f'<td>{link}</td></tr>')
-    if not srows:
-        srows = f'<tr><td colspan="6" class="empty">—</td></tr>'
+    # safety subset — gated by --safety (mirrors the XLSX Safety-Related sheet):
+    # a plain search must NOT emit the standalone subset; the is_safety amber
+    # row-highlight inside the works table above remains always-on for scanning.
+    safety_block = ""
+    if safety:
+        srows = ""
+        for w in works:
+            if not w.get("is_safety"):
+                continue
+            url = _html_link(w.get("url"))
+            link = f'<a href="{esc(url)}" target="_blank" rel="noopener">↗</a>' if url else "—"
+            abs_snip = restore_abstract_paragraphs((w.get("abstract_snippet") or "")[:220])
+            abs_html = esc(abs_snip).replace("\n\n", "<br><br>").replace("\n", "<br>")
+            srows += (f'<tr><td>{esc(w.get("source"))}</td><td>{esc(w.get("title"))}</td>'
+                      f'<td class="num">{esc(w.get("year"))}</td><td>{esc(w.get("publication"))}</td>'
+                      f'<td>{abs_html}{"…" if len(w.get("abstract_snippet") or "") > 220 else ""}</td>'
+                      f'<td>{link}</td></tr>')
+        if not srows:
+            srows = f'<tr><td colspan="6" class="empty">—</td></tr>'
+        safety_block = (f'<h2>{esc(L["safety"])}</h2>'
+                        '<table><thead><tr><th>'
+                        f'{esc(L["col.source"])}</th><th>{esc(L["col.title"])}</th>'
+                        f'<th class="num">{esc(L["col.year"])}</th><th>{esc(L["col.pub"])}</th>'
+                        f'<th>{esc(L["col.abstract"])}</th><th>{esc(L["col.link"])}</th>'
+                        '</tr></thead><tbody>' + srows + '</tbody></table>')
 
     # PRISMA funnel (P0-B) — machine rule-based screen summary
     prisma = data.get("prisma")
@@ -296,6 +537,15 @@ def render(data, lang):
             + (f'<div class="prisma-note">排除原因 / Excluded: {esc(reason_txt)}</div>' if reason_txt else "")
             + f'<div class="prisma-note">⚠️ {esc(prisma.get("note", ""))}</div>'
             f'</div>')
+
+    # Concept co-occurrence network (D) — inline SVG, stdlib-only, deterministic
+    net_html = ""
+    if works:
+        net_svg = concept_network_svg(works, P)
+        if net_svg:
+            net_html = (f'<h2>{esc(L["net.title"])}</h2>'
+                        f'<div class="prisma">{net_svg}'
+                        f'<div class="prisma-note">{esc(L["net.note"])}</div></div>')
 
     # Evidence & verification (P0: provenance + citation verification, ct-base §17.1)
     evidence = data.get("evidence_log") or {}
@@ -383,6 +633,13 @@ def render(data, lang):
             box-shadow:0 1px 3px rgba(0,0,0,.06); }}
     .kpi-label {{ font-size:12px; color:var(--greytx); }}
     .kpi-val {{ font-size:24px; font-weight:700; color:var(--navy); margin-top:4px; }}
+    .pdf-summary {{ margin-top:12px; padding:10px 14px; background:#e8f8f0; border-radius:8px; font-size:13px; }}
+    .pdf-summary b {{ color:var(--navy); }}
+    .tips {{ margin-top:14px; background:var(--light); border:1px solid var(--grid); border-radius:8px;
+             padding:10px 16px 8px; font-size:12.5px; color:#333; }}
+    .tips .tips-title {{ font-weight:700; color:var(--navy); margin-bottom:4px; }}
+    .tips ol {{ margin:0; padding-left:18px; }}
+    .tips li {{ margin:2px 0; line-height:1.5; }}
     table {{ width:100%; border-collapse:collapse; background:#fff; margin-top:12px;
              border:1px solid var(--grid); border-radius:8px; overflow:hidden; }}
     th,td {{ padding:9px 11px; text-align:left; border-bottom:1px solid var(--grid);
@@ -391,6 +648,23 @@ def render(data, lang):
     tr:nth-child(even) td {{ background:#fafcfb; }}
     tr.safety td {{ background:var(--warn); }}
     tr.safety td:first-child {{ border-left:4px solid var(--warnbd); }}
+    /* works table: source·id wraps (short ids, ≤2 lines); title gets an
+       explicit generous share; authors collapse to one ellipsized line so
+       they never squeeze the title; compact padding keeps records short */
+    table.works th, table.works td {{ padding:5px 8px; }}
+    table.works td.srcid {{ max-width:150px; }}
+    table.works td.srcid .src {{ display:block; font-size:12px; color:#556; }}
+    table.works td.srcid .rid {{ display:block; font-size:12px; color:#667; word-break:break-all; }}
+    table.works td.title {{ width:24%; min-width:240px; word-break:break-word; }}
+    table.works td.auths {{ max-width:180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+    table.works td.title a {{ color:var(--navy); font-weight:600; text-decoration:none; }}
+    table.works td.title a:hover {{ color:var(--blue); text-decoration:underline; }}
+    table.works th.abs, table.works td.abs {{ width:30%; min-width:280px; word-break:break-word; }}
+    /* abstract: collapsed to 2 lines by default; click the cell to expand */
+    table.works td.abs.expandable {{ cursor:pointer; }}
+    table.works td.abs .clip {{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }}
+    table.works td.abs.open .clip {{ display:block; -webkit-line-clamp:unset; }}
+    table.works td.abs .act {{ color:var(--blue); font-size:11px; user-select:none; margin-left:2px; white-space:nowrap; }}
     .num {{ text-align:right; font-variant-numeric:tabular-nums; }}
     .empty {{ color:var(--greytx); text-align:center; }}
     .barwrap {{ position:relative; min-width:150px; }}
@@ -426,6 +700,8 @@ def render(data, lang):
 <div class="meta">{esc(L['generated'])}: {now} ｜ {total} works</div>{searchinfo}</div>
 <div class="wrap">
   <div class="kpis">{kpi_html}</div>
+  {pdf_summary}
+  {tips_html}
 
   <h2>{esc(L['overview'])}</h2>
   <div class="dist">
@@ -435,19 +711,31 @@ def render(data, lang):
   </div>
 
   <h2>{esc(L['works'])}</h2>
-  <table><thead><tr><th>{esc(L['col.source'])}</th><th>{esc(L['col.id'])}</th><th>{esc(L['col.title'])}</th>
+  <table class="works"><thead><tr><th>{esc(L['col.srcid'])}</th><th>{esc(L['col.title'])}</th>
+  <th class="abs">{esc(L['col.abstract'])}</th>
   <th>{esc(L['col.authors'])}</th><th class="num">{esc(L['col.year'])}</th><th>{esc(L['col.pub'])}</th>
-  <th>{esc(L['col.type'])}</th><th>{esc(L['col.study'])}</th><th class="num">{esc(L['col.cited'])}</th><th>{esc(L['col.link'])}</th><th>{esc(L['col.oa'])}</th></tr></thead>
+  <th>{esc(L['col.type'])}</th><th>{esc(L['col.study'])}</th><th class="num">{esc(L['col.cited'])}</th>
+  <th>{esc(L['col.oa'])}</th>
+  </tr></thead>
   <tbody>{wrows}</tbody></table>
 
-  <h2>{esc(L['safety'])}</h2>
-  <table><thead><tr><th>{esc(L['col.source'])}</th><th>{esc(L['col.title'])}</th><th class="num">{esc(L['col.year'])}</th>
-  <th>{esc(L['col.pub'])}</th><th>{esc(L['col.abstract'])}</th><th>{esc(L['col.link'])}</th></tr></thead>
-  <tbody>{srows}</tbody></table>
+  {safety_block}
 
   {prisma_html}
+  {net_html}
   {evidence_html}
-</div></body></html>"""
+</div>
+<script>
+/* expand / collapse long abstracts in the works table (click the abstract cell) */
+document.addEventListener('click', function(e) {{
+  var t = e.target.closest('td.abs.expandable');
+  if (!t) return;
+  var open = t.classList.toggle('open');
+  var a = t.querySelector('.act');
+  if (a) a.textContent = open ? a.dataset.less : a.dataset.more;
+}});
+</script>
+</body></html>"""
 
 
 def main():
@@ -456,9 +744,11 @@ def main():
                     help=".merged.json (hidden intermediate from ct_literature)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"])
+    ap.add_argument("--safety", action="store_true",
+                    help="emit the standalone Safety / CSM subset section (off by default)")
     args = ap.parse_args()
     data = json.load(open(args.in_json, encoding="utf-8"))
-    html_out = render(data, args.lang)
+    html_out = render(data, args.lang, safety=args.safety)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(html_out)
     print(f"HTML written: {args.out} ({len(html_out)} bytes, lang={args.lang})")

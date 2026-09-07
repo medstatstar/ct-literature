@@ -29,6 +29,7 @@ from adapters import fetch_europepmc
 from adapters import fetch_semantic_scholar
 from adapters import fetch_preprints
 from adapters import fetch_arxiv
+from adapters.fetch_coze_unified import dispatch as coze_dispatch, DISPATCHABLE_SOURCES
 import normalize
 import export_xlsx
 import export_html
@@ -124,21 +125,72 @@ def _verify_top_n(works, n, timeout=15, check_consistency=True):
 
 # P0 new capabilities default flags
 DEFAULT_CITATION_STYLE = "apa"
-DEFAULT_EXPORT_BIB = True
+# Export default = OFF: HTML + Excel are the standard deliverables; bib / ris /
+# references_<style>.md are generated on demand (--export-bib or a chat request).
+DEFAULT_EXPORT_BIB = False
 DEFAULT_PRISMA = True
 DEFAULT_RANK = "cited"  # keep legacy cited-by ordering unless --rank relevance
 
 
+def _empty_payload(source_display: str) -> dict:
+    """空结果 payload（本地格式：source=规范名, works=[]），Coze/离线双路径失败时返回，
+    保证 normalize.merge 拿到统一结构、不因缺键报错。"""
+    return {"source": source_display, "count": 0, "works": [], "total_count": 0}
+
+
+def _coze_dispatch_with_fallback(source, keyword, year_from, year_to, max_results, offline, name):
+    """Coze 统一检索 + 本地兜底。
+
+    --offline 或 Coze 不可用时自动降级本地 fetch（返回格式已归一化为本地格式：
+    {"source": 规范名, "works": [...], "count": N}）。
+    中间调用 log_feishu=False（不记飞书），最终汇总由 run() 末尾单独记一条。
+    """
+    if offline:
+        # 强制本地兜底
+        result = coze_dispatch(source, keyword, year_from, year_to, max_results,
+                               run=True, log_feishu=False, offline=True)
+        if result and not result.get("error"):
+            return result
+        return result or _empty_payload(name)
+
+    # 先尝试 Coze
+    try:
+        result = coze_dispatch(source, keyword, year_from, year_to, max_results,
+                               run=True, log_feishu=False)
+        if result and not result.get("error"):
+            return result
+        # Coze 返回 error → 降级
+        _out(f"[WARN] {name} Coze 失败({result.get('error') if result else 'None'})，降级本地 fetch",
+             "coze_fallback", source=name)
+    except Exception as e:
+        _out(f"[WARN] {name} Coze 异常: {e}，降级本地 fetch",
+             "coze_fallback", source=name, error=str(e))
+
+    # 本地兜底（失败时记飞书一条，暴露降级）
+    result = coze_dispatch(source, keyword, year_from, year_to, max_results,
+                           run=True, log_feishu=True, offline=True)
+    return result or _empty_payload(name)
+
+
 def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         max_results=50, with_europepmc=True, with_semantic_scholar=False,
-        with_biorxiv=False, with_medrxiv=False, with_arxiv=False,
+        with_biorxiv=True, with_medrxiv=True, with_arxiv=False,
         with_prospero=False, prospero_token=None, prospero_header="PROSPERO-ACCESS-TOKEN",
         with_guidelines=False, guideline_sources=None, guideline_max=20,
         verify_mode="all", verify_top_n=15, verify_consistency=True,
         out_dir="./out", make_xlsx=True, make_html=True, openalex_key=None,
         citation_style=DEFAULT_CITATION_STYLE, export_bib=DEFAULT_EXPORT_BIB,
         prisma=DEFAULT_PRISMA, rank=DEFAULT_RANK, keywords=None,
-        obsidian=False, zotero=False, lang="auto", cochrane=False):
+        obsidian=False, zotero=False, lang="auto", cochrane=False,
+        merge_existing=None, stamp_date=None, preprint_fallback=False,
+        download_pdf=False, include_reviews=True, online=False, offline=False):
+    """merge_existing: path to a PREVIOUS run's .merged.json (or a payload dict /
+    list of records). When set, this run's works are unioned with that history and
+    every record is stamped first_seen / last_seen (living review / surveillance).
+    Read from disk only — no network. Default None => behaviour unchanged.
+    download_pdf: 是否在检索完成后进入 PDF 批量下载流程（opt-in）。
+    online: 使用 Coze 端统一检索（6 个文献源走 Coze 服务端），中间调用不记飞书。
+    offline: 强制本地兜底（不调 Coze），与老版本行为完全一致。"""
     os.makedirs(out_dir, exist_ok=True)
     # normalize --keywords (comma-separated string) → list once, so scoring AND all
     # exporters (HTML banner / XLSX scope / meta JSON) see the same shape
@@ -158,6 +210,9 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             _out("[i18n] " + i18n.t("topic.translated", en=topic),
                  "topic_translated", zh=_topic_zh, en=topic, partial=False)
     http_utils.notify_openalex_key_if_missing(openalex_key)
+    # Semantic Scholar key 提示（无条件触发，与是否启用该源无关——即使默认关闭，
+    # 也应在首次使用/未配置时告知申请路径、不外发承诺与提速收益）
+    http_utils.notify_s2_key_if_missing()
     oa_json = os.path.join(out_dir, "openalex.json")
     epmc_json = os.path.join(out_dir, "europepmc.json")
     s2_json = os.path.join(out_dir, "semantic_scholar.json")
@@ -168,39 +223,74 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     merged_json = os.path.join(out_dir, ".merged.json")
 
     # ---- fetch all enabled sources in PARALLEL (per-source concurrency) ----
-    # Each source is an independent network call that writes its own JSON file; running
-    # them concurrently turns the summed per-source latency into the latency of the
-    # SLOWEST source. (Intra-source multi-page pagination stays serial inside each
-    # fetcher — default max_results=50 stays within ~2 pages of 25 and keeps
-    # rate-limit risk low on the keyless OpenAlex pool.)
+    # Each source is independent; running them concurrently turns summed per-source
+    # latency into the latency of the SLOWEST source.
+    #
+    # --online 模式：6 个文献源走 Coze 服务端（中间调用 log_feishu=False），
+    #   Coze 不可用时自动降级本地 fetch（与老版本行为一致）。
+    # --offline 模式：强制本地兜底（不调 Coze）。
+    # 默认（无 --online/--offline）：保持老版本行为（本地 fetch），100% 向后兼容。
     jobs = []
-    jobs.append(("OpenAlex", lambda: fetch_openalex.fetch(
-        topic, review_type, year_from, year_to, safety, max_results,
-        run=True, out=oa_json, api_key=openalex_key)))
-    if with_europepmc:
-        jobs.append(("EuropePMC", lambda: fetch_europepmc.fetch(
+    if online:
+        # Coze 统一检索：6 个文献源走服务端，中间调用不记飞书
+        _coze_sources = [
+            ("OpenAlex", "openalex"),
+            ("EuropePMC", "europepmc"),
+            ("bioRxiv", "biorxiv"),
+            ("medRxiv", "medrxiv"),
+            ("SemanticScholar", "semantic_scholar"),
+            ("arXiv", "arxiv"),
+        ]
+        for _name, _src in _coze_sources:
+            if _src == "europepmc" and not with_europepmc:
+                continue
+            if _src == "semantic_scholar" and not with_semantic_scholar:
+                continue
+            if _src == "biorxiv" and not with_biorxiv:
+                continue
+            if _src == "medrxiv" and not with_medrxiv:
+                continue
+            if _src == "arxiv" and not with_arxiv:
+                continue
+            # 闭包捕获 _src/_name
+            jobs.append((_name, lambda s=_src, n=_name: _coze_dispatch_with_fallback(
+                s, topic, year_from, year_to, max_results, offline, n)))
+        # PROSPERO 不走 Coze（独立 token-gated），保持本地调用
+        if with_prospero:
+            jobs.append(("PROSPERO", lambda: fetch_prospero.fetch(
+                topic, review_type, year_from, year_to, safety, max_results,
+                run=True, out=prospero_json, token=prospero_token, header_name=prospero_header)))
+    else:
+        # 老版本行为（本地 fetch），100% 向后兼容
+        jobs.append(("OpenAlex", lambda: fetch_openalex.fetch(
             topic, review_type, year_from, year_to, safety, max_results,
-            run=True, out=epmc_json, cochrane=cochrane)))
-    if with_semantic_scholar:
-        jobs.append(("SemanticScholar", lambda: fetch_semantic_scholar.fetch(
-            topic, review_type, year_from, year_to, safety, max_results,
-            run=True, out=s2_json)))
-    if with_biorxiv:
-        jobs.append(("bioRxiv", lambda: fetch_preprints.fetch(
-            topic, review_type, year_from, year_to, safety, max_results,
-            run=True, out=biorxiv_json, server="biorxiv")))
-    if with_medrxiv:
-        jobs.append(("medRxiv", lambda: fetch_preprints.fetch(
-            topic, review_type, year_from, year_to, safety, max_results,
-            run=True, out=medrxiv_json, server="medrxiv")))
-    if with_arxiv:
-        jobs.append(("arXiv", lambda: fetch_arxiv.fetch(
-            topic, review_type, year_from, year_to, safety, max_results,
-            run=True, out=arxiv_json)))
-    if with_prospero:
-        jobs.append(("PROSPERO", lambda: fetch_prospero.fetch(
-            topic, review_type, year_from, year_to, safety, max_results,
-            run=True, out=prospero_json, token=prospero_token, header_name=prospero_header)))
+            run=True, out=oa_json, api_key=openalex_key,
+            include_reviews=include_reviews)))
+        if with_europepmc:
+            jobs.append(("EuropePMC", lambda: fetch_europepmc.fetch(
+                topic, review_type, year_from, year_to, safety, max_results,
+                run=True, out=epmc_json, cochrane=cochrane,
+                include_reviews=include_reviews)))
+        if with_semantic_scholar:
+            jobs.append(("SemanticScholar", lambda: fetch_semantic_scholar.fetch(
+                topic, review_type, year_from, year_to, safety, max_results,
+                run=True, out=s2_json)))
+        if with_biorxiv:
+            jobs.append(("bioRxiv", lambda: fetch_preprints.fetch(
+                topic, review_type, year_from, year_to, safety, max_results,
+                run=True, out=biorxiv_json, server="biorxiv")))
+        if with_medrxiv:
+            jobs.append(("medRxiv", lambda: fetch_preprints.fetch(
+                topic, review_type, year_from, year_to, safety, max_results,
+                run=True, out=medrxiv_json, server="medrxiv")))
+        if with_arxiv:
+            jobs.append(("arXiv", lambda: fetch_arxiv.fetch(
+                topic, review_type, year_from, year_to, safety, max_results,
+                run=True, out=arxiv_json)))
+        if with_prospero:
+            jobs.append(("PROSPERO", lambda: fetch_prospero.fetch(
+                topic, review_type, year_from, year_to, safety, max_results,
+                run=True, out=prospero_json, token=prospero_token, header_name=prospero_header)))
 
     payloads = []
     source_notes = []  # degradation notices for sources that failed to fetch (rate-limit / error)
@@ -323,7 +413,38 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     if verify_mode != "background":
         _drain_verifiers()
 
-    works = normalize.merge(payloads)
+    works, dedup_stats = normalize.merge_with_stats(payloads)
+
+    # ---- cross-run incremental merge (living review / surveillance) ----
+    # Opt-in via --merge-existing: union this run's works with a PREVIOUS run's local
+    # .merged.json and stamp first_seen / last_seen. Pure local file read. When
+    # merge_existing is None this block is a no-op and the pipeline is byte-identical
+    # to before. Runs BEFORE the Cochrane filter so retained records are filtered too.
+    merge_stats = None
+    if merge_existing:
+        works, merge_stats = normalize.merge_with_history(
+            works, merge_existing, today=stamp_date)
+        _out("[merge-existing] +%d new / %d carryover / %d retained-from-history "
+             "= %d works (stamp %s)"
+             % (merge_stats["new"], merge_stats["carryover"],
+                merge_stats["retained_only"], merge_stats["total"],
+                merge_stats["stamp"]),
+             "merge_existing", **merge_stats)
+
+    # ---- preprint candidates for non-OA works (opt-in via --preprint-fallback) ----
+    # For works with no OA full text (is_oa false / open_access_url empty), search
+    # bioRxiv / medRxiv (Europe PMC PPR) + arXiv by title and attach an author-verified
+    # candidate to work["preprint"] (ported from meta-analysis pdf_fetch: "prefer
+    # missing over wrong" — any author-check failure drops the candidate).
+    preprint_stats = None
+    if preprint_fallback:
+        from adapters import preprint_fallback as _pf
+        preprint_stats = _pf.enrich(works, progress=lambda m: _out(m, "preprint"))
+        _out("[preprint-fallback] scanned=%d candidates=%d rejected=%d no-authors=%d "
+             "servers=%s" % (preprint_stats["scanned"], preprint_stats["candidates"],
+                             preprint_stats["rejected"], preprint_stats["skipped_no_authors"],
+                             ",".join(preprint_stats["servers"])),
+             "preprint_fallback", **preprint_stats)
 
     # Full API total for the Cochrane journal-filtered Europe PMC query — captured
     # from the fetcher's `hit_count` (independent of --max), so it reports the true
@@ -357,7 +478,8 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     prisma_block = None
     if prisma:
         sp = screen_prisma.screen(works, topic=topic, review_type=review_type,
-                                  safety=safety)
+                                  safety=safety,
+                                  duplicates_removed=dedup_stats["duplicates_removed"])
         works = sp["works"]
         prisma_block = sp["prisma"]
 
@@ -401,16 +523,6 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
              % (verify_top_n, _skipped, json.dumps(vsum, ensure_ascii=False)),
              "verify_done", mode="top", top_n=verify_top_n,
              sampled=_skipped, summary=vsum)
-    elif verify_mode == "none":
-        for _w in works:
-            _w.setdefault("citation_verified", False)
-            _w.setdefault("citation_verify_status", "no_identifier")
-            _w.setdefault("citation_verify_note", "verify disabled (--verify none)")
-        vsum = {"total": len(works), "verified": 0, "bot_blocked": 0, "unresolved": 0,
-                "no_identifier": len(works), "suspicious": 0, "mismatch": 0,
-                "unverified_sampled": 0, "skipped_preview": True,
-                "mode": "none"}
-        _out("[OK] citation verification skipped (mode=none)", "verify_done", mode="none")
     else:  # verify_mode == "background" — handled by the two-phase block below
         pass
 
@@ -461,7 +573,8 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 "cochrane": cochrane,
                 "cochrane_count": cochrane_count,
                 "cochrane_total": cochrane_total,
-                "source_notes": source_notes}
+                "source_notes": source_notes,
+                "merge_existing": merge_stats}   # living-review delta (None when off)
         if _tp["translated"]:  # 中文→英文翻译信息（供报告展示与溯源）
             meta["topic_en"] = _tp["topic_en"]
             meta["topic_translated"] = True
@@ -523,7 +636,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             try:
                 export_xlsx.export_workbook(
                     {"count": len(works), "works": works, "meta": meta},
-                    xlsx_out, lang=lang)
+                    xlsx_out, lang=lang, safety=safety)
                 _out("[OK] xlsx  -> %s" % xlsx_out, "export_done", kind="xlsx",
                      path=xlsx_out, **_ver)
                 primary = primary or xlsx_out
@@ -533,7 +646,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         if make_html:
             html_out = os.path.join(out_dir, "lit_report.html")
             try:
-                html_text = export_html.render(out_data, lang)
+                html_text = export_html.render(out_data, lang, safety=safety)
                 with open(html_out, "w", encoding="utf-8") as f:
                     f.write(html_text)
                 _out("[OK] html  -> %s" % html_out, "export_done", kind="html",
@@ -542,6 +655,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             except Exception as _he:
                 _out("[WARN] html export failed: %s" % _he,
                      "export_failed", kind="html", error=str(_he), **_ver)
+        # end-user guidance on optional add-ons (surfaced to the chat after the run)
+        _out("[TIP] Excel 报告是完整结果，可在此基础上继续筛选 / 透视等进一步处理。", "tip", **_ver)
+        if not export_bib:
+            _out("[TIP] 如需 Zotero(RIS) / BibTeX / APA 等引文格式下载、或协助对 OA 文献下载 PDF，告诉我即可按需生成（也可用 --export-bib / --download-pdf）。附加功能不清楚时，对话中输入「菜单」让我列选。", "tip", **_ver)
         if obsidian:
             try:
                 ob = obsidian_exporter.export_obsidian(
@@ -598,6 +715,84 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     else:
         primary = _finalize(works, vsum, suffix="", guidelines=guidelines_payload)
 
+    # ---- PDF 批量下载（opt-in via --download-pdf）----
+    if download_pdf:
+        try:
+            from adapters.pdf_download import PdfDownloader
+            pdf_dir = os.path.join(out_dir, "pdfs")
+            dl = PdfDownloader(out_dir=pdf_dir, progress=lambda m: _out(m, "pdf_download"))
+            _out(f"[PDF] 开始批量下载 {len(works)} 篇文献的 PDF：每篇约需 10–20 秒"
+                 f"（视网络与限流而定），请耐心等待完成，无需任何操作。")
+            pdf_stats = dl.run(works)
+            if pdf_stats.get("rejected"):
+                # 总量超上限被拒：提示缩小范围（用户 2026-09-06：>50 直接拒绝避免超时）
+                _out(f"[PDF] 拒绝下载 (elapsed {pdf_stats.get('elapsed_s', 0)}s): "
+                     f"{pdf_stats.get('rejected_reason', '')}",
+                     "pdf_download_rejected", reason=pdf_stats.get("rejected_reason", ""))
+            else:
+                # 耗时统计反馈（用户 2026-09-07：每次 PDF 下载都要报用时）
+                _ok, _tot = pdf_stats.get("ok", 0), pdf_stats.get("total", 0)
+                # 下载完成后把 PDF 本地路径回写进 Excel（用户 2026-09-07）：
+                # run() 已把 local_pdf_path / pdf_download_note 写到内存 works 上，
+                # 用同一渲染函数重渲 lit_report.xlsx ——「PDF 本地路径」列（导出器
+                # _WORKS_COLS 早已预留）即真实呈现；不用 openpyxl 改存以免丢图表。
+                _xlsx_updated = ""
+                if make_xlsx:
+                    try:
+                        with open(merged_json, encoding="utf-8") as _f:
+                            _meta = (json.load(_f) or {}).get("meta") or {}
+                        # PdfDownloader 落盘路径可能相对 out_dir → 统一绝对路径再写入
+                        for _w in works:
+                            if _w.get("local_pdf_path"):
+                                _w["local_pdf_path"] = os.path.abspath(_w["local_pdf_path"])
+                        export_xlsx.export_workbook(
+                            {"count": len(works), "works": works, "meta": _meta},
+                            os.path.join(out_dir, "lit_report.xlsx"),
+                            lang=lang, safety=safety)
+                        _xlsx_updated = os.path.join(out_dir, "lit_report.xlsx")
+                        _out("[OK] xlsx 已更新：PDF 本地路径已写入报告 -> %s"
+                             % _xlsx_updated, "xlsx_updated",
+                             path=_xlsx_updated, kind="xlsx_pdf_paths")
+                    except Exception as _xe:
+                        _out("[WARN] xlsx 回写 PDF 路径失败（不影响已下载的 PDF）: %s"
+                             % _xe, "pdf_xlsx_update_failed", error=str(_xe))
+                # 用户可读反馈：不倾倒技术性 JSON（stats 细节仅经 json 事件透传）
+                _el = pdf_stats.get("elapsed_s")
+                _base = f"[PDF] 下载完成: {_ok}/{_tot} 篇成功"
+                if _el is not None:
+                    _base += f"，用时 {_el}s（{pdf_stats.get('elapsed_min', 0)} 分钟）"
+                if _xlsx_updated:
+                    _out(f"{_base}。PDF 已保存至 {pdf_dir}，Excel 报告已更新「PDF 本地路径」列。",
+                         "pdf_download_done", **pdf_stats)
+                elif _ok > 0:
+                    _out(f"{_base}。PDF 已保存至 {pdf_dir}。",
+                         "pdf_download_done", **pdf_stats)
+                else:
+                    _out(f"{_base}。未下载到可用 PDF（多为付费墙 / 无 OA 直链）。",
+                         "pdf_download_done", **pdf_stats)
+        except Exception as e:
+            _out(f"[PDF] 批量下载失败: {type(e).__name__}: {e}", "pdf_download_failed", error=str(e))
+
+    if online:
+        # 最终汇总记一条飞书（log_feishu=True）：统计信息经 querystr 透传，
+        # Coze 端飞书节点原样落 querystr 列，供审计追踪整次多源检索的汇总。
+        try:
+            _summary_payload = {
+                "type": "literature_summary",
+                "topic": _topic_zh,
+                "query": topic,
+                "sources_ok": len([p for p in payloads if p and not p.get("error")]),
+                "sources_fail": len([p for p in payloads if p and p.get("error")]),
+                "hits_merged": len(works),
+            }
+            coze_dispatch("openalex", topic, year_from, year_to, max_results,
+                          run=True, log_feishu=True,
+                          querystr=json.dumps(_summary_payload, ensure_ascii=False),
+                          skillname="literature")
+            _out("[OK] 飞书汇总已记录 (log_feishu=True)", "feishu_summary")
+        except Exception as e:
+            _out(f"[WARN] 飞书汇总记录失败（不影响主流程）: {e}", "feishu_summary_failed", error=str(e))
+
     _out("[OK] run finished: %s" % primary, "run_done", primary=primary or "")
     return primary
 
@@ -621,12 +816,19 @@ def main():
                          "(citation-ranked); its API key requires a manual form review and is "
                          "not auto-issued, so it auto-skips when absent and never affects the "
                          "OpenAlex / Europe PMC primary output")
-    ap.add_argument("--with-biorxiv", action="store_true",
-                    help="include bioRxiv preprints (biomedical preprints, via Europe PMC PPR index)")
-    ap.add_argument("--with-medrxiv", action="store_true",
-                    help="include medRxiv preprints (medical/clinical preprints, via Europe PMC PPR index)")
+    ap.add_argument("--with-biorxiv", action=argparse.BooleanOptionalAction, default=True,
+                    help="include bioRxiv preprints (biomedical preprints, via Europe PMC PPR index); "
+                         "default ON; use --no-with-biorxiv to disable")
+    ap.add_argument("--with-medrxiv", action=argparse.BooleanOptionalAction, default=True,
+                    help="include medRxiv preprints (medical/clinical preprints, via Europe PMC PPR index); "
+                         "default ON; use --no-with-medrxiv to disable")
     ap.add_argument("--with-arxiv", action="store_true",
                     help="include arXiv (physics/CS/ML methodology breadth; opt-in supplementary)")
+    ap.add_argument("--preprint-fallback", action="store_true",
+                    help="for non-OA works, look up bioRxiv/medRxiv/arXiv preprint "
+                         "candidates (title search + author-surname verification, "
+                         "'prefer missing over wrong'); attaches work['preprint'] "
+                         "shown in the XLSX/HTML 'Preprint candidate' column")
     ap.add_argument("--cochrane", action="store_true",
                     help="(focus) restrict the Europe PMC leg to the Cochrane Database of "
                          "Systematic Reviews via a verified journal filter, then keep only "
@@ -670,8 +872,9 @@ def main():
                     help="citation style for references export (default: apa)")
     ap.add_argument("--export-bib", action=argparse.BooleanOptionalAction,
                     default=DEFAULT_EXPORT_BIB,
-                    help="export references.bib / references.ris (default: on; "
-                         "use --no-export-bib to disable)")
+                    help="export references.bib / references.ris / references_<style>.md "
+                         "(default: off — HTML + Excel are the standard deliverables; "
+                         "enable for Zotero RIS / BibTeX / APA downloads)")
     ap.add_argument("--prisma", action=argparse.BooleanOptionalAction,
                     default=DEFAULT_PRISMA,
                     help="run deterministic PRISMA title/abstract screen + funnel "
@@ -680,19 +883,21 @@ def main():
                     help="order works by cited_by_count (default) or relevance_score")
     ap.add_argument("--keywords", default=None,
                     help="comma-separated extra keywords for relevance scoring")
-    # ---- P0: citation verification scope ----
-    ap.add_argument("--verify", default="all", choices=["all", "top", "none", "background"],
-                    help="citation verification scope (anti-hallucination, ct-base §17.1): "
-                         "all = verify every work (default); top = verify only the top-N by "
-                         "rank (fastest, good for large result sets); none = skip verification; "
-                         "background = two-phase: emit an unverified report immediately, then "
-                         "re-render with verification results when the background pass finishes. "
-                         "All modes skip re-resolution of identifiers already trusted by provenance.")
+    # ---- P0: citation verification scope (anti-hallucination, ct-base §17.1) ----
+    # NOTE: `none` was removed on purpose — the verification gate is a hard P0 control and
+    # must never be fully disabled from the CLI. Lowest selectable scope is `top`.
+    ap.add_argument("--verify", default="all", choices=["all", "top", "background"],
+                    help="citation verification scope (anti-hallucination, ct-base §17.1 — "
+                         "cannot be fully disabled): all = verify every work (default); "
+                         "top = verify only the top-N by rank (fastest, good for large result "
+                         "sets); background = two-phase: emit an unverified report immediately, "
+                         "then re-render with verification results when the background pass "
+                         "finishes. All modes skip re-resolution of identifiers already trusted "
+                         "by provenance.")
     ap.add_argument("--verify-top-n", type=int, default=15,
-                    help="N for --verify top (default 15): number of top-ranked works to verify")
-    ap.add_argument("--no-verify-citations", action="store_true",
-                    help="legacy alias for `--verify none` (disable citation verification). "
-                         "⚠️ WARNING: disables the anti-hallucination gate (ct-base §17.1); use only for debugging or non-critical scoping.")
+                    help="N for --verify top (default 15): how many top-ranked works get the "
+                         "full check. This does NOT disable verification — it only sizes the "
+                         "top-N sample under --verify top; identifier resolution still runs.")
     ap.add_argument("--no-consistency", action="store_true",
                     help="skip the title/author consistency cross-check (identifier still "
                          "resolved, but not compared against the resolved paper's metadata). "
@@ -707,6 +912,30 @@ def main():
                     help="UI language for xlsx / html / markdown / obsidian outputs. "
                          "auto = follow OS locale (zh in a Chinese locale, else en); "
                          "force zh or en to override.")
+    # ---- G: cross-run incremental merge (living review / surveillance) ----
+    ap.add_argument("--merge-existing", default=None, metavar="MERGED_JSON",
+                    help="(living review) path to a PREVIOUS run's .merged.json: this "
+                         "run's works are UNIONed with that history and every record is "
+                         "stamped first_seen / last_seen. Records seen before keep their "
+                         "earliest first_seen and get a refreshed last_seen; records only "
+                         "in history are retained (last_seen NOT refreshed, "
+                         "seen_this_run=false) so the evidence base can only grow. "
+                         "Reads the local file only — ZERO network. Off by default.")
+    ap.add_argument("--stamp-date", default=None, metavar="YYYY-MM-DD",
+                    help="date stamp for --merge-existing first_seen / last_seen "
+                         "(default: today). Useful for backfilling a historical run.")
+    ap.add_argument("--download-pdf", action="store_true",
+                    help="(opt-in) 检索完成后进入 PDF 批量下载流程：OA 直链/预印本直接下载，"
+                         "其余经 coze 批量下载节点处理（直下探测→浏览器+S3，支持二次重试）")
+    ap.add_argument("--include-reviews", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="include review-type publications in results (default: on; "
+                         "use --no-include-reviews to exclude at the source and save quota)")
+    ap.add_argument("--online", action="store_true",
+                    help="(opt-in) 使用 Coze 端统一检索（6 个文献源走 Coze 服务端），"
+                         "中间调用不记飞书、最终汇总记一条；Coze 不可用时自动降级本地 fetch")
+    ap.add_argument("--offline", action="store_true",
+                    help="(opt-in) 强制本地兜底（不调 Coze），与老版本行为完全一致")
     ap.add_argument("--progress", default="human", choices=["human", "json"],
                     help="progress output mode: human (readable console, default) or "
                          "json (NDJSON event stream on stdout — run_start / source_done / "
@@ -737,6 +966,8 @@ def main():
             extra.append("Cochrane(EPMC journal filter)")
         if args.with_guidelines:
             extra.append("Guidelines(12+)")
+        if args.merge_existing:
+            extra.append("merge-existing(%s)" % args.merge_existing)
         srcs = "OpenAlex" + (" + " + ", ".join(extra) if extra else "")
         _out("[PREVIEW] would run literature pipeline: topic=%r review_type=%r safety=%s "
              "sources=[%s] (use --run)" % (args.topic, args.review_type, args.safety, srcs),
@@ -751,7 +982,7 @@ def main():
         with_guidelines=args.with_guidelines,
         guideline_sources=args.guideline_sources,
         guideline_max=args.guideline_max,
-        verify_mode=("none" if args.no_verify_citations else args.verify),
+        verify_mode=args.verify,
         verify_top_n=args.verify_top_n,
         verify_consistency=not args.no_consistency,
         out_dir=args.out_dir,
@@ -759,7 +990,12 @@ def main():
         openalex_key=args.openalex_key, citation_style=args.citation_style,
         export_bib=args.export_bib, prisma=args.prisma, rank=args.rank,
         keywords=args.keywords, obsidian=args.obsidian, zotero=args.zotero,
-        lang=args.lang, cochrane=args.cochrane)
+        lang=args.lang, cochrane=args.cochrane,
+        merge_existing=args.merge_existing, stamp_date=args.stamp_date,
+        preprint_fallback=args.preprint_fallback,
+        download_pdf=args.download_pdf,
+        include_reviews=args.include_reviews,
+        online=args.online, offline=args.offline)
 
 
 if __name__ == "__main__":

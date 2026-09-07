@@ -102,6 +102,129 @@ For each database used, document: query style, field focus, date filters, and th
 
 ---
 
+## 4.1 Chinese databases (CNKI / 万方 / SinoMed) and Web of Science
+
+> 中文小节 / Chinese subsection. Covers the databases a China-facing evidence base
+> (NMPA context, Chinese-population studies, journals not indexed in MEDLINE, 学位论文
+> and 会议论文) cannot skip, plus the Web of Science syntax note.
+
+**⚠️ 各库字段符随版本调整，使用前请以该库当期检索说明为准。**
+The field codes and the exact/fuzzy operators below are the *commonly seen* forms, not a
+guarantee: CNKI / 万方 / SinoMed have all changed their search UIs and 专业检索 syntax
+across versions. Two rules that keep you safe:
+
+1. **Prefer the UI drop-downs over hand-written codes.** All three databases expose
+   高级检索 with a field drop-down (主题 / 题名 / 关键词 / 摘要 / 作者 / 作者单位 / 期刊)
+   plus an 精确 / 模糊 toggle and a 并含 / 或含 / 不含 logic selector. Selecting the field
+   from the drop-down is version-stable; typing a code is not.
+2. **Run a minimal validation query first.** Before pasting the full strategy, run
+   `A AND B` (two single words) in the same box. If the current version rejects it, find
+   out what it accepts *before* transcribing the full strategy — never assume.
+
+### 4.1.1 What is safe to assume (all three)
+
+| Element | Support |
+|---|---|
+| Boolean `AND` / `OR` / `NOT` (upper case) | Supported; the only operator set to rely on |
+| Parentheses `( )` for grouping | Supported in the professional/expert search box; ⚠️ in a single 高级检索 row it may not be — split OR-groups across rows using 或含 instead |
+| Exact phrase | English double quotes `"…"` in the professional box; ⚠️ in 高级检索 rows the 精确/模糊 toggle is the reliable control |
+| Truncation / wildcards | **Differs per database and per version — verify per run, do not assume `*` behaves as it does in PubMed** |
+
+### 4.1.2 Field codes (common forms — ⚠️ verify against the current help page)
+
+| Semantic field | CNKI 中国知网 | 万方 WanFang | SinoMed 中国生物医学文献服务系统 |
+|---|---|---|---|
+| 主题 (title+keywords+abstract) | `SU=` exact / `SU%` fuzzy | `主题:(…)` | use the 高级检索 field drop-down (推荐) |
+| 题名 / title | `TI=` / `TI%` | `题名:(…)` | drop-down; ⚠️ command-box code not assumed here |
+| 关键词 / keywords | `KY=` / `KY%` | `关键词:(…)` | drop-down |
+| 摘要 / abstract | `AB=` / `AB%` | `摘要:(…)` | drop-down |
+| 作者 / author | `AU=` | `作者:(…)` | drop-down |
+| 作者单位 / affiliation | `AF=` | `作者单位:(…)` | drop-down |
+| 期刊 / source | `JN=` (⚠️ older versions used `LY=`) | `刊名:(…)` | drop-down |
+
+SinoMed deliberate omission: its 高级检索 is drop-down driven and its 智能检索 applies
+its own term mapping, so **no command-box field codes are asserted for SinoMed in this
+document**. Use the drop-downs, or read the code list off the in-product help page.
+
+### 4.1.3 Worked conversion of the §3 strategy
+
+Running example — P: 非小细胞肺癌 / NSCLC · I: 奥希替尼 / osimertinib ·
+evidence type: RCT OR 系统评价/Meta 分析.
+
+**CNKI — 高级检索 (drop-down path, most stable)**
+
+| 行 | 逻辑关系 | 字段 | 匹配 | 值 |
+|---|---|---|---|---|
+| 1 | — | 主题 | 模糊 | 非小细胞肺癌 |
+| 2 | 并含 | 主题 | 模糊 | 奥希替尼 |
+| 3 | 并含 | 主题 | 模糊 | 随机对照试验 |
+| 4 | 或含 | 主题 | 模糊 | 系统评价 |
+| 5 | 或含 | 主题 | 模糊 | Meta分析 |
+
+Row 3–5 is the OR-group expressed as 或含 rows rather than one parenthesised expression.
+⚠️ The row-to-row combination order (whether the OR-group is evaluated before the AND)
+is version-dependent — check the hit count of the OR-group alone first, then add the
+AND rows and confirm the count shrinks as expected.
+
+**CNKI — 专业检索 (⚠️ codes per current help page)**
+
+```
+SU='非小细胞肺癌' AND SU='奥希替尼' AND (SU='随机对照试验' OR SU='系统评价' OR SU='Meta分析')
+```
+
+**万方 — 专业检索 (⚠️ codes per current help page)**
+
+```
+主题:(非小细胞肺癌) AND 主题:(奥希替尼) AND (主题:(随机对照试验) OR 主题:(系统评价) OR 主题:(Meta分析))
+```
+
+**SinoMed — 高级检索**
+
+```
+行1  主题 / 常用字段 = 非小细胞肺癌      (AND)
+行2  主题 / 常用字段 = 奥希替尼          (AND)
+行3  主题 / 常用字段 = 随机对照试验      (AND)
+行4  主题 / 常用字段 = 系统评价          (OR)
+行5  主题 / 常用字段 = Meta分析          (OR)
+研究类型 / 文献类型 → 用「限定条件」面板选择，而不是写进检索式
+```
+
+SinoMed exposes 文献类型 and 年份 through its 限定条件 panel rather than the query
+string — use the panel, and record in the PRISMA appendix that the filter came from the
+panel (it is not reproducible from the query text alone).
+
+**Web of Science**
+
+```
+TS=("non-small cell lung cancer" OR NSCLC) AND TS=(osimertinib)
+   AND (TS=("randomized controlled trial") OR TS=("systematic review") OR TS=(meta-analysis))
+```
+
+WoS notes: `TS=` = topic (title + abstract + author keywords + KeyWords Plus); `TI=` title,
+`AB=` abstract, `AK=` author keywords, `AU=` author, `PY=` publication year, `SO=` source
+title, `DO=` DOI. Operators: `AND` / `OR` / `NOT`, plus `NEAR/x` and `SAME` for
+proximity. `"…"` is an exact phrase. `*` is a right-hand (and mid-word) wildcard whose
+behaviour is **not** identical to PubMed's — verify with one probe before relying on it.
+WoS has **no controlled vocabulary**, so synonyms, abbreviations and spelling variants
+must be enumerated by hand; this is the accepted compromise recorded in §4.
+
+### 4.1.4 Export (no API — manual)
+
+None of CNKI / 万方 / SinoMed exposes a documented public search API, and all three are
+subscription-gated. **This skill does not crawl them.** Records must be exported by an
+agent or by browser automation first, then imported (§9).
+
+| Database | Export entry | Formats | Note |
+|---|---|---|---|
+| CNKI | 检索结果页 → 勾选 → 导出/参考文献 | RefWorks / NoteExpress / EndNote / GB/T 7714 (⚠️ availability varies) | per-batch cap (⚠️ commonly seen: 50 / 500) — export in batches |
+| 万方 | 检索结果页 → 导出 | RefWorks / NoteExpress / EndNote / 自定义 | per-batch cap — export in batches |
+| SinoMed | 结果集 → 输出 / 保存 | 文本 / RefWorks (⚠️) | per-batch cap — export in batches |
+
+Per-record `source` must be set to `CNKI` / `WanFang` / `SinoMed` at import time so the
+merged evidence base stays source-attributable (§5 source-preservation rule).
+
+---
+
 ## 5. Result normalization
 
 A cross-database collection is only usable if records are normalized to one schema.
@@ -171,5 +294,40 @@ Behaviour in this mode:
 3. Provide an import slot so manually exported records can be normalized into the same schema and merged/de-duplicated with the automated set.
 4. Label every record with evidence status and preliminary tier.
 5. Report the full strategy (terms, synonyms, filters, per-database adaptation) so the search is reproducible in a PRISMA appendix.
+
+### 9.1 Chinese-database import slot (CNKI / 万方 / SinoMed)
+
+**本技能不做中文库实时抓取** — no public API, subscription-gated, and the export step is
+interactive. The import slot is a *file contract*, not a crawler:
+
+1. Run the per-database query from §4.1.3 in the browser, select all, export as
+   RefWorks / EndNote text (see §4.1.4).
+2. Convert to a payload JSON with the §5 minimum field set — at minimum
+   `title` · `authors` · `year` · `publication` · `abstract_snippet` · `doi` · `url` ·
+   `source` (set to `CNKI` / `WanFang` / `SinoMed`) · `keywords`.
+3. Merge it into the automated set:
+
+   ```bash
+   python scripts/normalize.py --in cnki.json openalex.json --out merged.json
+   ```
+
+4. Across runs, accumulate instead of re-exporting (living review):
+
+   ```bash
+   python scripts/ct_literature.py --topic "<topic>" --run --out-dir ./out \
+       --merge-existing ./out/.merged.json
+   ```
+
+**Dedup caveat (CJK).** `normalize._norm_title` keeps CJK codepoints (`\u4e00-\u9fff`),
+so a Chinese title is not flattened to an empty string and does not collapse all Chinese
+records onto one dedupe key. But most Chinese records carry **no DOI**, so dedupe falls
+back to the title key — and title keys are exact after normalization. 繁简异体,
+全角/半角 and 中英标点 variants therefore split one paper into two records. Normalize
+titles to Simplified Chinese with consistent punctuation **at export/conversion time**,
+and spot-check the merged count against the exported count.
+
+**Other field mismatches to fix at conversion:** `year` may be a full date string;
+`authors` may be a single `;`-joined string; `publication` may carry the 中文刊名 only.
+Map all of these onto the §5 minimum set before merging.
 
 **Cochrane (CDSR) note:** the Cochrane Database of Systematic Reviews is now retrievable directly via `--cochrane` — a verified Europe PMC journal filter (identical to meta-analysis's in-skill dedup probe, so cross-skill hit counts stay consistent). No manual browser step is needed for CDSR. Embase / Web of Science remain manual (subscription).

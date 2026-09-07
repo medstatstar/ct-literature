@@ -1,13 +1,13 @@
 ---
 slug: ct-literature
 name: ct-literature
-displayName: 临床试验文献检索专家 / Clinical Trial Literature Search
+displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
-version: 0.9.5
+version: 0.9.8
 invocable: true
-summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + Semantic Scholar 引用增强 + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集，附带可选英文→中文摘要术语标注工具（本地、术语级替换，非全文翻译）；临床指南 12+ 源「本地语料库」模式。
+summary: 检索公开学术文献（OpenAlex + Europe PMC + 预印本 + arXiv），归一化合并为证据基础与 CSM 定性安全性文献集，含工作台对话界面与 PDF 直链解码。
 license: MIT
-description: "检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + Semantic Scholar 引用增强 + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集，附带可选英文→中文摘要术语标注工具（本地、术语级替换，非全文翻译）；临床指南 12+ 源「本地语料库」模式。 / Search public scholarly literature (OpenAlex as primary source + Europe PMC/MeSH biomedical precision [on by default] + Semantic Scholar citation enrichment + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize and de-duplicate it into one evidence base plus a qualitative CSM safety-literature subset; ships an optional local English→Chinese abstract term-annotation tool (term-level substitution, not full-text translation); clinical guidelines via a LOCAL corpus spanning 12+ sources."
+description: "Search public scholarly literature (OpenAlex as primary source + Europe PMC/MeSH biomedical precision [on by default] + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize and de-duplicate it into one evidence base plus a qualitative CSM safety-literature subset; ships an optional local English→Chinese abstract term-annotation tool (term-level substitution, not full-text translation); clinical guidelines via a LOCAL corpus spanning 12+ sources. (Semantic Scholar is an explicit opt-in source requiring --with-semantic-scholar + key, not part of the default data sources.) / 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，产出证据基础与 CSM 定性安全性文献集，附带可选英文→中文摘要术语标注工具（本地、术语级替换，非全文翻译）；临床指南 12+ 源「本地语料库」模式。（Semantic Scholar 为显式可选源，需 --with-semantic-scholar + key，不纳入默认数据源）"
 triggers:
   - "systematic literature search"
   - "系统文献检索"
@@ -27,7 +27,7 @@ metadata:
 permissions:
   scope: "user-space-only"
   network: "optional"
-  network_note: "Reads only public bibliographic sources: OpenAlex (api.openalex.org, no key), Europe PMC (ebi.ac.uk, MEDLINE/MeSH, no key; also indexes bioRxiv/medRxiv preprints via SRC:PPR), Semantic Scholar (api.semanticscholar.org, no key; rate-limited HTTP 429 -> gracefully skipped), arXiv (export.arxiv.org/api/query, no key). Europe PMC is ON by default (--no-with-europepmc to disable); bioRxiv/medRxiv/arXiv are opt-in via --with-biorxiv / --with-medrxiv / --with-arxiv. No WAF, no confidential input; ordinary input + public retrieval (B-tier). Opt-in, user-confirmed bug reports additionally reach https://ct-bugreport.coze.site/run with an 11-key sanitized envelope only (never raw data)."
+  network_note: "Reads only public bibliographic sources: OpenAlex (api.openalex.org, no key), Europe PMC (ebi.ac.uk, MEDLINE/MeSH, no key; also indexes bioRxiv/medRxiv preprints via SRC:PPR), Semantic Scholar (api.semanticscholar.org, no key; rate-limited HTTP 429 -> gracefully skipped), arXiv (export.arxiv.org/api/query, no key). Europe PMC is ON by default (--no-with-europepmc to disable); bioRxiv/medRxiv are ON by default (--no-with-biorxiv / --no-with-medrxiv to disable); arXiv is opt-in via --with-arxiv. No WAF, no confidential input; ordinary input + public retrieval (A-tier). Opt-in, user-confirmed bug reports additionally reach https://ct-bugreport.coze.site/run with an 11-key sanitized envelope only (never raw data)."
   filesystem: "read-only to its own files; writes report files only to the current working directory"
   data: "no confidential data input; no external transmission of user data"
 
@@ -44,7 +44,7 @@ Retrieve **published scholarly literature** (peer-reviewed papers, systematic re
 
 ## Positioning within the ct- library
 
-The four B-tier public-intel skills are complementary:
+The four A-tier public-intel skills (non-confidential input, `network=public-retrieval`) are complementary:
 
 | Skill | Answers | Object retrieved | Source family |
 |---|---|---|---|
@@ -62,18 +62,20 @@ The four B-tier public-intel skills are complementary:
 | OpenAlex | Public REST; free key recommended (100k/day via `.env` auto-load) — keyless capped 100/day since 2026-02-13 | Required (primary) | Broad coverage + citation counts |
 | Europe PMC | Public REST (MEDLINE / PubMed Central), no key, MeSH-indexed | **Default ON** (`--no-with-europepmc`) | Biomedical precision + MeSH |
 | Cochrane (CDSR) | Via Europe PMC journal filter | Opt-in `--cochrane` | Cochrane Database of Systematic Reviews only |
-| Semantic Scholar | Public Graph API, no key, rate-limited (429) | Optional `--with-semantic-scholar` | Citation-aware ranking; degrades gracefully on 429 |
-| bioRxiv / medRxiv | Via Europe PMC `SRC:PPR` + publisher filter | Optional `--with-biorxiv` / `--with-medrxiv` | Preprints (Tier P) |
+| Semantic Scholar | Public Graph API, no key, rate-limited (429) | **Opt-in only** `--with-semantic-scholar` (not part of default sources; requires key to be useful) | Citation-aware ranking; skipped when no key |
+| bioRxiv / medRxiv | Via Europe PMC `SRC:PPR` + publisher filter | **Default ON** (`--no-with-biorxiv` / `--no-with-medrxiv`) | Preprints (Tier P) |
 | arXiv | Public Atom API, no key | Optional `--with-arxiv` | Methodology breadth |
 | PROSPERO | Public REST (CRD York); **auth header undocumented** | Optional `--with-prospero` (key-gated, **reserved source**) | Duplication-avoidance / protocol discovery |
 
-> All are public bibliographic APIs — no WAF. OpenAlex keyless = 100 credits/day since 2026-02-13; a free key lifts to 100k/day (`--openalex-key` / env `OPENALEX_API_KEY` / skill `.env` auto-load; key never printed). Semantic Scholar skips outright when no key is configured (manual application review).
+> All are public bibliographic APIs — no WAF. The **default data sources are OpenAlex (primary) + Europe PMC (on by default) + bioRxiv/medRxiv (on by default)**; everything else (arXiv, Cochrane, PROSPERO, Semantic Scholar) is opt-in. OpenAlex keyless = 100 credits/day since 2026-02-13; a free key lifts to 100k/day (`--openalex-key` / env `OPENALEX_API_KEY` / skill `.env` auto-load; key never printed). Semantic Scholar is an explicit opt-in source (`--with-semantic-scholar` + key) and is **not considered in the default pipeline**.
 >
 > **PROSPERO is a reserved source (2026-08-12):** its public REST auth header is undocumented; unauthenticated probes return `{"status":"error",...}`. `--with-prospero` is a dormant interface: without a token it degrades to a graceful no-op skip (returns `None`, no file written) and is **not** claimed functional. Supply `--prospero-token` (+ `--prospero-header`) to exercise it; parser is schema-tolerant (JSON + XML) but must be re-validated against a real 200 before declared done. No token application planned.
 
 ## Clinical guideline sources (`--with-guidelines`, opt-in · LOCAL corpus)
 
 Guidelines are **version-pinned** reference standards — at analysis time we read a **pre-built LOCAL corpus**, never "fetch latest" per run.
+
+> **Corpus boundary (audit note 2026-09-07):** every entry is a manually curated, version-pinned pointer to an organisation-issued document, but the builder's 12+ sources also surface reviews / consensus / adherence analyses and AI-in-medicine commentary. Such items are kept as background pointers only and are **not** authoritative clinical guidance — always resolve the linked source before relying on it; a `retrieved:false` pointer is an honest placeholder, never a fabricated citation.
 
 > **🔒 Data-protection split.** The skill tree ships **pointer-only** (`references/guidelines/guidelines_index.json`: org/title/URL/version — publish-safe). **Full-text documents are NEVER written into the skill** — they live in the author's self-controlled Coze KB (or an EXTERNAL local cache `~/.workbuddy/ct-guideline-docs`, opt-in via `--download`, off by default); ct-advisor consults that KB for native guideline Q&A.
 
@@ -97,13 +99,13 @@ Guidelines are **version-pinned** reference standards — at analysis time we re
 | Review-type filter | All | `systematic-review` / `meta-analysis` / `rct` / `case-report` |
 | **Cochrane retrieval (focus)** | Europe PMC | `--cochrane` → restrict to the Cochrane Database of Systematic Reviews (verified journal filter, shared with meta-analysis) |
 | Year-range filter | All | Focus on recent evidence |
-| Safety / CSM bias | All | Surface published AE / PV literature |
+| Safety / CSM tagging | All | Every work is flagged `is_safety` (amber-highlighted in the Works sheet) when its title/abstract mentions AE / PV / toxicity — useful for quick scanning. **The standalone Safety-Related sheet is opt-in** (`--safety`); a plain search does NOT emit it by default. |
 | Multi-source merge + dedupe | normalize | One unified list, DOI/title de-duped, provenance kept |
 | Citation ranking | OpenAlex / S2 | Most influential works |
 | MeSH terms | Europe PMC | Biomedical concept indexing |
 | Concepts / Keywords / Funders | OpenAlex | Topic classification + COI signals |
 | PubMed/PMC ID, OA full-text URL, complete abstract | All | Direct links + full evidence preservation |
-| Structured output | — | JSON + Markdown + Excel workbook (ct-base `excel_style`) |
+| Structured output | — | JSON + Markdown + Excel workbook (ct-base `excel_style`). Default sheets: README → Overview → Works → Evidence Log. `Safety-Related` sheet appears **only with `--safety`**. |
 | Chained invocation | — | → `ct-pipeline` / `ct-protocol` / `ct-csr` |
 | Resilient fetch (retry + backoff) | All | Honors `Retry-After`; OpenAlex Bearer via key |
 | Safe link rendering | All | `_normalize_link()` sanitises every hyperlink |
@@ -128,10 +130,12 @@ Guidelines are **version-pinned** reference standards — at analysis time we re
 
 ## Output
 
+**Standard deliverables = HTML + Excel only.** Present `lit_report.html` to the user as the result, and remind them of the optional add-ons below (the report itself shows a "还能做什么 / Options" strip with these hints).
+
 - Per-source payloads: `openalex.json` / `europepmc.json` / `semantic_scholar.json` / `biorxiv.json` / `medrxiv.json` / `arxiv.json` (enabled only)
-- `lit_report.xlsx` — Excel delivery (ct-base `excel_style`; `--no-xlsx` to skip): Overview → Literature master → Safety-related, KPI cards, charts, `is_safety` amber highlighting
-- `lit_report.html` — self-contained HTML report (inline CSS, offline; `--no-html` to skip); inline-SVG PRISMA funnel when `--prisma`
-- `references.bib` / `references.ris` / `references_<style>.md` — formatted citations; `--no-export-bib` to skip
+- `lit_report.xlsx` — Excel delivery (ct-base `excel_style`; `--no-xlsx` to skip): Overview → Literature master → Safety-related, KPI cards, charts, `is_safety` amber highlighting. **The complete result — user can keep filtering / pivoting on top of it.**
+- `lit_report.html` — self-contained HTML report (inline CSS, offline; `--no-html` to skip); inline-SVG PRISMA funnel when `--prisma`. **Default deliverable to open.**
+- **On-demand citation formats** (default OFF since v0.9.7 — ask the user or use `--export-bib`): `references.bib` / `references.ris` / `references_<style>.md` (Zotero RIS / BibTeX / APA etc.). OA-PDF downloads are likewise on request: `--download-pdf` attempts **ALL** records that carry an OA URL or DOI (batched, legal OA sources only); users may instead ask for specific DOI / PMID(s) or the top-N works. **Server-side supplement chain (since v0.9.7)**: when the A-path direct links all fail, the coze endpoint runs a supplement chain — Unpaywall best-OA → Europe PMC PMC-OA → PPR preprints (bioRxiv/medRxiv, author-verified) — before the (off) browser fallback; the local skill only calls, it no longer implements multi-channel download algorithms.
 - `obsidian/` (`--obsidian`) — per-paper notes + `Literature MOC.md`; `zotero.csv` / `zotero.ris` (`--zotero`)
 - `.merged.json` gains additive `prisma` + per-work `relevance_score` / `prisma_included` blocks
 
@@ -146,7 +150,7 @@ See `references/sop.md` for the full command catalogue.
 ## ⚠️ Safety
 
 - Default **SAFE PREVIEW**: scripts only generate / display; network requests run only with explicit `--run`.
-- Reads **public publications ONLY**, zero confidential research / subject data input (B-tier; API keys are local config, never research data).
+- Reads **public publications ONLY**, zero confidential research / subject data input (A-tier — non-confidential input, per ct-base §11; API keys are local config, never research data).
 - `--safety` literature is **qualitative** — never feed it into FAERS disproportionality; it only corroborates `ct-safety` qualitatively.
 - Output is for reference / background only, not a regulatory submission.
 
@@ -184,7 +188,77 @@ See `references/errors.md` for the full error catalogue (network / 429 / 401 / e
 
 A cross-database planning layer (Embase / Cochrane / Web of Science + preprint Tier P, adapted from `multi-database-literature-collector`, AIPOCH MIT) builds search strategy; live fetch still runs the six sources. See `references/multi-db-search.md`. The **Cochrane** leg is now directly automatable via `--cochrane` (a verified Europe PMC journal filter — identical to meta-analysis's in-skill dedup probe), so CDSR needs no manual browser step.
 
-Natural-language dialogue follows `references/search_menu.md` (ct-base Type-Search framework, triage-first).
+## Natural-Language Dialogue — Triage-First (mandatory)
+
+NL dialogue MUST triage before choosing the interaction shape. Mandatory per
+ct-base §6.2 + `references/search_menu.md` — this step is never skipped.
+
+### Step 0 Triage (four buckets, run on the user's first message)
+
+| Bucket | Condition | Behavior |
+|---|---|---|
+| **Simple** | topic + ≥2 parameters clear (e.g. "osimertinib systematic reviews since 2020") | straight to §4.2 preview confirmation; no §4.1 menu |
+| **Complex** | topic given but parameters missing / multiple intents (e.g. "diabetes treatment literature") | §4.1 initial confirmation menu → once parameters are complete, forced through the §12 keyword gate → §4.2 preview confirmation → run |
+| **Vague** | what the user wants is unclear (e.g. "find me that new drug") | grill-me branch questions (≤2 rounds), then re-triage |
+| **Middle** | single deep point (e.g. "how to compute sample size") | answer directly; no menu |
+
+### Red lines
+
+- **Never skip triage and run `--run` directly.** Even with a clear topic, missing key parameters (review_type / year / sources / …) makes the Complex menu flow mandatory.
+- **Never decide for the user.** The Complex menu must carry a "still unsure → explain the differences" entry (option ③ in the CN UI: 说「详细解释这些选择之间的差异」，我先讲清临床与统计含义再让你决定).
+- **The §12 keyword-system confirmation gate is mandatory:** whenever the user provides parseable search terms, build the Manifest and let the user review the expanded keywords before running.
+
+### Cross-turn continuity (continuity.md mode A, high risk)
+
+ct-literature's query spec lives ONLY in the conversation thread (OpenAlex /
+Europe PMC etc. are stateless remotes); a dropped field silently searches the
+wrong scope.
+
+#### Echo block (append after every run)
+
+```
+## 当前检索设定：topic=… | type=… | year=… | safety=… | sources=… | max=… | verify=…
+```
+
+- Fixed prefix `## 当前检索设定：` (inherited by search_menu.md §13)
+- Fields are `key=value`, pipe-separated; missing defaults use `—`; **never omit fields**
+- Full field list: `topic / type / year / safety / sources / max / verify`
+
+#### Follow-ups change only the changed fields
+
+The LLM must read the MOST RECENT settings block in the conversation, override
+only the fields the user changed this turn, keep the rest as-is, then proceed
+to the §12 gate or run.
+
+#### merge_spec fallback (default path)
+
+ct-literature is a high-risk skill (continuity.md §5.1); `merge_spec.py` is the
+DEFAULT path on follow-ups:
+
+```bash
+echo '{"prev":{previous full spec},"cur":{this-turn partial}}' \
+  | python ct-base/scripts/merge_spec.py
+```
+
+Feed the `merged` output into the §12 keyword gate. `prev` comes from the
+thread's latest settings block — never persisted, never cached across turns.
+
+#### Local-only continuity
+
+OpenAlex / Europe PMC / bioRxiv / medRxiv are all **stateless remotes** — they
+do not remember your previous search parameters. Continuity (parameter
+inheritance) MUST be solved locally (thread-resident + echo block +
+merge_spec); there is no "the remote will remember" fallback.
+
+### Execution flow
+
+```
+user request → Step 0 Triage
+  ├─ Simple → §4.2 preview confirm → §12 keyword gate → run → §13 echo
+  ├─ Complex → §4.1 initial menu → parameters complete → §12 keyword gate → §4.2 preview confirm → run → §13 echo
+  ├─ Vague → grill-me (≤2 rounds) → re-triage
+  └─ Middle → answer directly (no menu)
+```
 
 ## Bug Reporting (ct-base §20.3, adapter: `adapters/bug_report.py`)
 

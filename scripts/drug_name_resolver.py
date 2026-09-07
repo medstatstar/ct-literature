@@ -144,7 +144,7 @@ def resolve(drug, event=None, auto=False):
         return (drug, False)
     if auto:
         candidates = lookup(drug)
-        if len(candidates) == 1:
+        if candidates:
             return (candidates[0], True)
         return (drug, False)
     return suggest(drug, event)

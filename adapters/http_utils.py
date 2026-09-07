@@ -455,12 +455,12 @@ def notify_s2_key_if_missing(api_key=None, env_var="SEMANTIC_SCHOLAR_API_KEY"):
     print(t("semantic_scholar.key_notice"))
 
 
-# Module-level guard so the "no key" notice prints at most once per process.
-_KEY_NOTICE_SHOWN = False
+# Module-level guard so the "no key" notice prints at most once per day (用户 2026-09-07 要求每天提醒).
+_KEY_NOTICE_SHOWN_DATE = None
 
 
 def notify_openalex_key_if_missing(api_key=None, env_var="OPENALEX_API_KEY"):
-    """Print a one-time, locale-aware notice when no OpenAlex API key is configured.
+    """Print a one-time-per-day, locale-aware notice when no OpenAlex API key is configured.
 
     Intended for the runtime entry points (ct_literature.run / fetch_openalex.fetch):
     when the key is absent the skill still works in keyless mode (100 credits/day since
@@ -471,21 +471,23 @@ def notify_openalex_key_if_missing(api_key=None, env_var="OPENALEX_API_KEY"):
         api_key: the key already resolved for this run (may be None).
         env_var: env var name used to look up the key if api_key is None.
     """
-    global _KEY_NOTICE_SHOWN
-    if _KEY_NOTICE_SHOWN:
+    global _KEY_NOTICE_SHOWN_DATE
+    from datetime import date
+    today = date.today().isoformat()
+    if _KEY_NOTICE_SHOWN_DATE == today:
         return
     if api_key:
-        _KEY_NOTICE_SHOWN = True
+        _KEY_NOTICE_SHOWN_DATE = today
         return
     # Re-resolve from env / .env; load_openalex_key() sets os.environ on a hit and
     # never prints the key value.
     resolved = load_openalex_key(env_var)
     if resolved:
-        _KEY_NOTICE_SHOWN = True
+        _KEY_NOTICE_SHOWN_DATE = today
         return
     from i18n import t
     print(t("openalex.key_notice", url=OPENALEX_SIGNUP_URL))
-    _KEY_NOTICE_SHOWN = True
+    _KEY_NOTICE_SHOWN_DATE = today
 
 
 def _retry_after(e):

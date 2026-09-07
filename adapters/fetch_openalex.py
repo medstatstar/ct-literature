@@ -112,6 +112,21 @@ def _flag_safety(record):
     return any(k in blob for k in SAFETY_LEXICON)
 
 
+def _bare_doi(v):
+    """OpenAlex 的 doi 字段是完整 URL（https://doi.org/10.xxxx/…）→ 剥成裸 DOI。
+    2026-09-06 实测根因：未归一化会把 URL 形态 DOI 写入统一 schema，导致
+    coze/EPMC 端 `DOI:"https://…"` 查询全部落空、PMC-OA 通道整批失效。"""
+    if not v:
+        return v
+    s = str(v).strip()
+    low = s.lower()
+    for p in ("https://doi.org/", "http://doi.org/",
+              "https://dx.doi.org/", "http://dx.doi.org/"):
+        if low.startswith(p):
+            return s[len(p):]
+    return s
+
+
 def _extract(record):
     loc = record.get("primary_location") or {}
     src = loc.get("source") or {} if loc else {}
@@ -138,23 +153,46 @@ def _extract(record):
             concepts.append(dn)
     # Keywords
     keywords = [k.get("display_name") for k in (record.get("keywords") or [])[:8] if k.get("display_name")]
-    # Open access URL
-    oa = record.get("best_oa_location") or {}
-    oa_url = oa.get("pdf_url") or oa.get("landing_page_url")
+    # Open access URL — accuracy-first (2026-09-04):
+    #   1. best_oa_location.pdf_url (OpenAlex's own best guess)
+    #   2. ANY locations[] entry with a pdf_url (OpenAlex sometimes parks the only
+    #      PDF in a non-best location — best_oa_location alone under-reports OA)
+    #   3. is_oa=True but no PDF anywhere → best_oa landing page (legit OA copy,
+    #      just not a direct PDF)
+    #   4. else None (the work is genuinely closed) — the generic landing page is
+    #      NOT promoted into open_access_url (that was inflating false "OA" hits).
+    oa_rec = record.get("open_access") or {}
+    is_oa = bool(oa_rec.get("is_oa"))
+    oa_status = oa_rec.get("oa_status")
+    best_oa = record.get("best_oa_location") or {}
+    oa_url = best_oa.get("pdf_url")
     if not oa_url:
-        oa_url = loc.get("landing_page_url") or record.get("doi") or record.get("id")
+        for _loc in record.get("locations") or []:
+            u = (_loc or {}).get("pdf_url")
+            if u:
+                oa_url = u
+                break
+    if not oa_url and is_oa:
+        oa_url = best_oa.get("landing_page_url")
+    landing_url = best_oa.get("landing_page_url") or loc.get("landing_page_url") \
+        or record.get("doi") or record.get("id")
     # Funders (top 3)
     funders = []
     for f in (record.get("funders") or [])[:3]:
         dn = f.get("display_name")
         if dn:
             funders.append(dn)
+    # OpenAlex has no pubTypeList; derive a `pub_types` from its `type` so the field
+    # is present and consistent with Europe PMC. Only map explicit review types to
+    # avoid false positives (keeps meta-analysis B1 hard signal trustworthy).
+    _oa_type = record.get("type")
+    pub_types = ["Review"] if _oa_type == "review" else []
     # Biblio (volume/issue/page)
     biblio = record.get("biblio") or {}
     return {
         "source": "OpenAlex",
         "id": record.get("id"),
-        "doi": record.get("doi"),
+        "doi": _bare_doi(record.get("doi")),
         "pmid": ids.get("pubmed"),
         "pmcid": ids.get("pmcid"),
         "title": title,
@@ -165,8 +203,10 @@ def _extract(record):
         "type": record.get("type"),
         "study_type": None,  # filled by caller via _study_type_from
         "cited_by_count": record.get("cited_by_count") or 0,
-        "url": oa_url,
-        "open_access_url": oa_url if (record.get("best_oa_location") or {}).get("pdf_url") else None,
+        "url": landing_url,
+        "is_oa": is_oa,
+        "oa_status": oa_status,
+        "open_access_url": oa_url,
         "abstract_snippet": snippet,
         "mesh": None,
         "concepts": concepts or None,
@@ -178,6 +218,7 @@ def _extract(record):
         "issue": biblio.get("issue"),
         "page": biblio.get("first_page"),
         "is_safety": False,  # filled by caller
+        "pub_types": pub_types,
     }
 
 
@@ -199,10 +240,17 @@ def _invindex_to_text(inv):
 
 def fetch(topic, review_type="all", year_from=None, year_to=None,
           safety=False, max_results=30, run=False, out=None, mailto="dev@example.com",
-          api_key=None):
+          api_key=None, include_reviews=True):
+    """Fetch from OpenAlex. When include_reviews=False, the `type:review` filter
+    is explicitly added so review-type works are excluded at the source.
+
+    OpenAlex type values: article, review, book-chapter, preprint, etc.
+    (see TYPE_MAP). Passing `type:!review` through the filter param requires
+    negation syntax, so instead we append `type:article` when excluding reviews
+    (articles are the primary study type for meta-analysis evidence)."""
     if not run:
-        print("[PREVIEW] would query OpenAlex for topic=%r review_type=%r (use --run to execute)"
-              % (topic, review_type))
+        print("[PREVIEW] would query OpenAlex for topic=%r review_type=%r include_reviews=%r "
+              "(use --run to execute)" % (topic, review_type, include_reviews))
         return None
 
     http_utils.notify_openalex_key_if_missing(api_key)
@@ -215,6 +263,10 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
     oa_type = _openalex_type_for(review_type)
     if oa_type:
         filt.append("type:%s" % oa_type)
+    elif not include_reviews:
+        # No specific review_type requested (== "all") and reviews excluded →
+        # restrict to article-level works to filter out type:review entries.
+        filt.append("type:article")
     if year_from:
         filt.append("from_publication_date:%d-01-01" % year_from)
     if year_to:
@@ -251,7 +303,7 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
             "per-page": min(per, max_results - len(collected)),
             "page": page,
             "mailto": mailto,
-            "select": "id,doi,title,display_name,publication_year,publication_date,type,cited_by_count,primary_location,authorships,abstract_inverted_index,ids,concepts,keywords,funders,best_oa_location,biblio,language,is_retracted",
+            "select": "id,doi,title,display_name,publication_year,publication_date,type,cited_by_count,primary_location,locations,authorships,abstract_inverted_index,ids,concepts,keywords,funders,best_oa_location,open_access,biblio,language,is_retracted",
         }
         url = BASE + "?" + urllib.parse.urlencode(params)
         headers = http_utils.build_openalex_headers(api_key=api_key, mailto=mailto)
@@ -310,11 +362,16 @@ def main():
     ap.add_argument("--openalex-key", default=http_utils.load_openalex_key(),
                     help="OpenAlex API key (Bearer). Auto-loaded from env OPENALEX_API_KEY "
                          "or skill .env. Free key lifts rate limit 100 -> 100k credits/day.")
+    ap.add_argument("--include-reviews", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="include review-type publications in results (default: on; "
+                         "use --no-include-reviews to exclude at the source)")
     ap.add_argument("--run", action="store_true", help="execute network request")
     ap.add_argument("--out", help="output JSON path")
     args = ap.parse_args()
     res = fetch(args.topic, args.review_type, args.year_from, args.year_to,
-                args.safety, args.max, args.run, args.out, args.mailto, args.openalex_key)
+                args.safety, args.max, args.run, args.out, args.mailto, args.openalex_key,
+                include_reviews=args.include_reviews)
     if res and not args.out:
         print(json.dumps(res, ensure_ascii=False, indent=2))
 

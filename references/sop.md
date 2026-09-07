@@ -1,7 +1,7 @@
 # ct-literature Operating SOP
 
 > Scope: systematic retrieval of **published-evidence literature** (papers / reviews / abstracts / citations), normalized and de-duplicated into an evidence-base report.
-> Tier: B (ordinary input + public retrieval, zero confidential data).
+> Tier: A (ct-base §11 — non-confidential input + public retrieval, zero confidential data).
 > Red line: default is PREVIEW only; real network retrieval requires explicit `--run`.
 > Complements `ct-registry`: this skill fetches **only literature metadata** (title / authors / journal / citations / year / type) and never fetches registry structured fields (phase / status / enrollment).
 

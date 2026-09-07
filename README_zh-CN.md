@@ -6,11 +6,11 @@
 <img src="assets/icon.svg" width="240" height="240" alt="ct-literature 图标"/>
 </div>
 
-> **`ct-` 技能库中的 B 档公开情报技能：检索某药物 / 疾病 / 方法已发表的学术文献，将多个公开文献源归一化为统一去重的证据库，并提取证据格局与 CSM（累积安全性监测）定性子集。**
+> **`ct-` 技能库中的 A 档公开情报技能（输入非涉密，ct-base §11）：检索某药物 / 疾病 / 方法已发表的学术文献，将多个公开文献源归一化为统一去重的证据库，并提取证据格局与 CSM（累积安全性监测）定性子集。**
 
 > 💡 **默认无 key 也能跑，但免费 key 能大幅提额：** OpenAlex 自 2026-02-13 起强制要求 key；无 key 时处于 keyless 池（100 credits/天，标注 *not suitable for production*）。免费 key 可提到 100k/天。申请约 30 秒 —— 见 §7 及技能在检测不到 key 时自动打印的申请提示。
 
-> 不需要命令，也不需要手册。你只要在对话里用**自然语言**说清想查什么：技能从 OpenAlex（主源）加可选的 Europe PMC / Semantic Scholar 取数，然后写出自包含的 **HTML + Excel** 报告。B 档：计算完全本地，仅对外公开检索。**注意：你的主题词会发往下方公开文献 API —— 出站说明见 §7。** 技能**仅在你明确发起文献检索时激活**，不会在不相关对话中自行联网检索。
+> 不需要命令，也不需要手册。你只要在对话里用**自然语言**说清想查什么：技能从 **OpenAlex（主源）+ Europe PMC（默认开启）+ bioRxiv/medRxiv（默认开启）** 取数，然后写出自包含的 **HTML + Excel** 报告。（Semantic Scholar 与 arXiv 是经 flag 显式开启的可选源，不纳入默认检索组合。）A 档（输入非涉密）：计算完全本地，仅对外公开检索。**注意：你的主题词会发往下方公开文献 API —— 出站说明见 §7。** 技能**仅在你明确发起文献检索时激活**，不会在不相关对话中自行联网检索。
 
 ## 目录
 - [适用人群](#适用人群)
@@ -38,18 +38,18 @@
 |---|---|---|
 | OpenAlex | 推荐 key（免费 100k/天，技能 `.env` 自动加载）；无 key 限 100/天（2026-02-13 起） | **主源** — 覆盖广、含引用数 |
 | Europe PMC | 无需 | **默认开启**（`--no-with-europepmc` 关闭） — MEDLINE/MeSH 生物医学精准 |
-| Semantic Scholar | 无需（易 429） | 可选 `--with-semantic-scholar` — 引用排序；**无 key / 429 时自动跳过** |
-| bioRxiv | 无需（经 Europe PMC PPR） | 可选 `--with-biorxiv` — 生物医学预印本 |
-| medRxiv | 无需（经 Europe PMC PPR） | 可选 `--with-medrxiv` — 医学/临床预印本 |
+| Semantic Scholar | 推荐 key（需填表人工审核） | **仅显式可选** `--with-semantic-scholar` — 引用排序；**不属默认数据源**，须显式开启且配置 key 才会检索 |
+| bioRxiv | 无需（经 Europe PMC PPR） | **默认开启**（`--no-with-biorxiv` 关闭） — 生物医学预印本 |
+| medRxiv | 无需（经 Europe PMC PPR） | **默认开启**（`--no-with-medrxiv` 关闭） — 医学/临床预印本 |
 | arXiv | 无需 | 可选 `--with-arxiv` — 物理/CS/ML 方法学广度 |
 | PROSPERO | 需 token（认证头未公开） | 可选 `--with-prospero` — 系统评价注册库 / 方案发现；**保留接口**，未提供可用 token+header 前自动降级为空跳过 |
 
 ### 各来源如何配合
 
-默认组合 —— **OpenAlex（主源）+ Europe PMC（默认开启）** —— 其实已经覆盖到了几乎整个已发表文献版图：通过这两个入口，你就能拿到 PubMed / PMC、bioRxiv / medRxiv / arXiv 预印本，以及 Crossref、Semantic Scholar、CORE、Unpaywall 的记录。其它来源做成可选，不是因为这对组合不完整，而是出于两个现实考量：
+默认组合 —— **OpenAlex（主源）+ Europe PMC（默认开启）+ bioRxiv/medRxiv（默认开启）** —— 其实已经覆盖到了几乎整个已发表文献版图：通过这三个入口，你就能拿到 PubMed / PMC、bioRxiv / medRxiv / arXiv 预印本，以及 Crossref、Semantic Scholar、CORE、Unpaywall 的记录（其中 Semantic Scholar 的记录经由 OpenAlex 的关联即已带入，无需单独查 S2）。其它来源做成可选，不是因为这对组合不完整，而是出于两个现实考量：
 
-- **抗限流** —— Europe PMC 偶尔会被限流（HTTP 429）。一旦如此，独立的各入口（Semantic Scholar、各家预印本服务器）让你可以绕开单一瓶颈、继续拓宽覆盖。
-- **预印本时效** —— 当你要追预印本的新鲜度时，才需要打开 **bioRxiv / medRxiv 的直接检索**：直接从源头拉取，而不必等它慢慢同步进 Europe PMC 的 PPR 供稿。
+- **预印本时效** —— **bioRxiv / medRxiv 现已默认开启**，直接从源头拉取预印本，不必等它慢慢同步进 Europe PMC 的 PPR 供稿。
+- **抗限流** —— 若 Europe PMC 偶尔被限流（HTTP 429），独立的预印本入口让你可以绕开单一瓶颈、继续拓宽覆盖。（Semantic Scholar 是另一项需 `--with-semantic-scholar` + key 的显式可选源，不属默认检索组合。）
 
 ## 为什么可以信任输出 —— 反幻觉设计
 
@@ -69,14 +69,14 @@
 
 ct-literature 是一个**对话式技能**：你只要把想查的内容告诉助手即可 —— 无需命令、无需记参数名。安装为 WorkBuddy 技能后，你在对话里通过 Skill 工具调用它即可，无需额外配置；但它只在你主动调用时激活。
 
-下面给出 8 个由简到繁的真实对话示例，每个都含**「你这样说」**与**「助手会这样回（示意）」**，并说明报告如何产出。主交付物是自包含的 **`lit_report.html`**（离线、可打印）与 **`lit_report.xlsx`**（4 页：概览 → 文献总表 → 安全性相关 → 证据溯源）。
+下面给出 8 个由简到繁的真实对话示例，每个都含**「你这样说」**与**「助手会这样回（示意）」**，并说明报告如何产出。主交付物是自包含的 **`lit_report.html`**（离线、可打印）与 **`lit_report.xlsx`**。默认工作簿含 **3 个数据页：概览 → 文献总表 → 证据溯源**（另含一张说明封面）。**安全性相关**页为显式可选 —— 仅当你加 `--safety`（CSM 定性子集）时才出现，因为安全性 / CSM 文献子集属于安全性导向的诉求，并非每次普通文献检索的默认交付。
 
 ### 示例 1 · 简单文献检索（直接作答）
 **你这样说：**
 检索奥希替尼在 NSCLC 的已发表文献，2018–2025。
 
 **助手会这样回（示意）：**
-正在路由到 OpenAlex（主源）。这是归一化后的证据库 —— 论文数量、高被引文献、年度趋势，外加一个 CSM 子集。报告已写入 `lit_report.xlsx`（以及 `lit_report.html`）。
+正在路由到 OpenAlex（主源）。这是归一化后的证据库 —— 论文数量、高被引文献、年度趋势。报告已写入 `lit_report.xlsx`（以及 `lit_report.html`）。若还要 CSM / 安全性相关子集单独成页，加 `--safety` 即可。
 
 **📌 无需 key** —— OpenAlex keyless 池足以覆盖小规模检索；技能直接取数并写报告。
 
@@ -101,30 +101,36 @@ ct-literature 是一个**对话式技能**：你只要把想查的内容告诉�
 **助手会这样回（示意）：**
 在 <https://openalex.org/settings/api> 申请免费 key（约 30 秒）。然后自行配置：(a) 在 `ct-literature/.env` 加一行 `OPENALEX_API_KEY=<key>`，(b) 设为环境变量 `OPENALEX_API_KEY`，(c) 命令行传 `--openalex-key <key>`。**注意**：聊天消息可能被平台记录留存——如需最高隐秘性，请走自配置 (a)–(c)。如你愿意，也可以让助手帮你把 key 写进 `ct-literature/.env`（key 仅本地存储、绝不回显、绝不写日志，只经 HTTPS 发往官方 OpenAlex API）。
 
+**配置 key 后检索会快很多、且 key 不外发**：有 key 时 OpenAlex 进入 keyed pool（约 10 万 credits/天、不易 429），OpenAlex / Semantic Scholar 两个源改为**本机本地直连检索，不经过云端**——你的 key 只在本机内存中用于请求官方 API，绝不上传任何第三方服务。仅未配置 key 的用户走云端通道（OpenAlex 匿名池，Semantic Scholar 自动跳过）。
+
 ### 示例 5 · 拿 Excel 交付物
 **你这样说：**
 能同时给我 Excel 文件吗？
 
 **助手会这样回（示意）：**
-可以 —— `--run` 总会一并产出 `lit_report.xlsx`（学术绿主题，4 页：概览 → 文献总表 → 安全性相关含 KPI 卡与图表；`is_safety` 行高亮）与 `lit_report.html`。用 `--no-xlsx` 跳过表格，或用 `--no-html` 跳过网页。
+可以 —— `--run` 总会一并产出 `lit_report.xlsx`（学术绿主题，默认 3 个数据页：概览 → 文献总表 → 证据溯源，含 KPI 卡与图表；`is_safety` 行高亮）与 `lit_report.html`。加 `--safety` 才会额外产出**「安全性相关」**页（CSM 子集）。用 `--no-xlsx` 跳过表格，或用 `--no-html` 跳过网页。
 
 ### 示例 6 · 复杂请求 → 弹出确认菜单
 **你这样说：**
 我想查一下糖尿病治疗相关的文献。
 
 **助手会这样回（示意）：**
-识别到主题 = 糖尿病，但类型 / 年份 / 来源尚待确认，于是弹出编号确认菜单（详见 `references/search_menu.md` §4.1–§4.3）：
+Triage → **Complex**（主题 = 糖尿病，但类型 / 年份 / 来源尚待确认）→ 弹出编号确认菜单（详见 `references/search_menu.md` §4.1–§4.3）：
 📚 文献检索 — 准备就绪
 已识别：主题：糖尿病 · 类型：全部 · 年份：未指定
 待确认：1) 文献类型 2) 年份区间 3) 安全性偏置 4) 数据源
 回复数字选择，或说"默认"采用推荐配置。
+
+（参数确认后 → 关键字体系确认门（§12）→ 预览确认（§4.2）→ 执行检索）
+
+**📌 说明：** 简单请求（topic + ≥2 参数明确）跳过初始菜单，直接进入 §4.2 预览；模糊请求走 grill-me 追问（≤2 轮）后再 triage。
 
 ### 示例 7 · 模糊请求 → 追问澄清（grill-me 风格）
 **你这样说：**
 帮我找一下那个新药，治癌症的。
 
 **助手会这样回（示意）：**
-主题模糊，于是反向追问（最多 2 轮，之后回退默认 + 预览提示，见 search_menu.md §6）：
+Triage → **Vague**（主题模糊）→ 反向追问（最多 2 轮，之后回退默认 + 预览提示，见 search_menu.md §6）：
 "具体是哪个药？例如奥希替尼、帕博利珠单抗，或某个靶点如 PD-1？"
 你点名后，锁定主题并进入预览确认。
 
@@ -214,7 +220,7 @@ ct-literature 是一个**对话式技能**：你只要把想查的内容告诉�
 - **能做什么：** 给定 DOI 或 PMID，尝试从合法来源（Unpaywall、Europe PMC、PubMed Central 等）解析开放获取 PDF 链接。
 - **耗费警告**：每次请求至少涉及 1 次 HTTP 查询 + 到 PDF 的重定向链。50 篇文献的批量会增加 **1–3 分钟**额外时间，并消耗额外的 API 额度（OpenAlex/Europe PMC）。
 - **不保证成功**：许多论文没有合法开放获取副本。技能会明确告知哪些解析成功、哪些没有。
-- **如何请求**：提供具体的 DOI/PMID 列表（如从报告中筛选），并说"尝试为这些文献获取合法 OA PDF"。
+- **如何请求**：直接说"下载全部 OA PDF"，或提供具体的 DOI/PMID 列表（如从报告中筛选），说"尝试为这些文献获取合法 OA PDF"；也可指定前 N 篇。"全部"会对每条带 OA 链接或 DOI 的记录自动尝试（分批、仅合法 OA 源）。
 
 **Q: 发现结果有误怎么办？怎么上报？**
 A: 本技能遵循 ct-base §20.3 错误报告流程。若您怀疑结果有误（或引擎报错），直接说 **"上报问题" / "report a bug" / "提交错误报告"**。技能在检测到疑似缺陷时（如引擎报错、重试仍失败）也会**主动询问**是否上报——**每会话最多 1 次**，您可随时拒绝。无论哪种方式，助手都会：
@@ -237,7 +243,7 @@ A: 本技能遵循 ct-base §20.3 错误报告流程。若您怀疑结果有误�
 ### 出站与隐私
 - **文献检索（仅公开 API）**：主题词与筛选发往 **OpenAlex** / **Europe PMC** / **Semantic Scholar**（仅你启用的源），引文验证时额外访问 **doi.org** 与 **Crossref**；绝不发送保密 / 申办方数据。
 - **Bug 报告（可选，需你确认）**：`adapters/bug_report.py` 仅在**两阶段确认后**才向 `https://ct-bugreport.coze.site/run` 发送 **11 键脱敏信封**（skill / version / error_type / description 等，不含原始数据与受试者信息）；无法联网时回退为本地文件。
-- **密钥留在本机**：key 从本地 `ct-literature/.env` 读取，绝不随包分发（仅 `.env.example` 随包）。OpenAlex 免费 key 请自行到 <https://openalex.org/settings/api> 申请，并按 §7 自行配置（`.env` / 环境变量 / `--openalex-key`）；切勿把 `.env` 提交进仓库。（也可让助手代为写入 `.env`——仅本地存储、绝不回显或写日志。）
+- **密钥留在本机**：key 从本地 `ct-literature/.env` 读取，绝不随包分发（仅 `.env.example` 随包）。OpenAlex 免费 key 请自行到 <https://openalex.org/settings/api> 申请，并按 §7 自行配置（`.env` / 环境变量 / `--openalex-key`）；切勿把 `.env` 提交进仓库。（可选、不推荐：可贴出 key 让助手在本地代写——仅存于本机、绝不回显或写日志；更推荐按 §7 自行配置。）
 
 ---
 
@@ -295,7 +301,7 @@ ct-literature/
 │   ├── i18n.py              # 双语唯一真源
 │   └── excel_style.py 等              # 共享样式（ct-base vendor）
 ├── references/              # SOP、key 配置、检索菜单、多库方法
-└── assets/icon.svg          # B 档 logo
+└── assets/icon.svg          # A 档 logo
 ```
 
 ### CLI 示例（开发者）
@@ -312,14 +318,15 @@ python scripts/ct_literature.py --topic "osimertinib" \
 cp .env.example .env          # 编辑 .env 填入 OPENALEX_API_KEY=你的key
 python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir ./out
 
-# P0 · 引文验证（默认开启）+ 证据日志在 --run 下自动产出；
-# 用 --verify {all|top|none} 控制范围；源感知跳过会避免「同源再回源」的冗余往返
+# P0 · 引文验证（默认开启，mode=background）+ 证据日志在 --run 下自动产出；
+# 用 --verify {all|top|background} 控制范围；源感知跳过会避免「同源再回源」的冗余往返
 # （来自 OpenAlex / Europe PMC 的论文直接按来源可信，不再回源核验）。
+# 验证是反幻觉闸门（ct-base §17.1 P0）：不可完全关闭——"none" 不是合法模式（v0.9.6 已移除 CLI 旁路）。
 python scripts/ct_literature.py --topic "osimertinib" --run --out-dir ./out
-# 大结果集的最佳速度/覆盖折中：仅验证按排序取的前 20 条
-python scripts/ct_literature.py --topic "osimertinib" --run --verify top --verify-top-n 20 --out-dir ./out
-# 用 --no-verify-citations（== --verify none）可显式关闭验证。
-python scripts/ct_literature.py --topic "osimertinib" --run --verify none --out-dir ./out
+# 大结果集的最佳速度/覆盖折中：仅验证按排序取的前 N 条（默认 15；--verify-top-n 调 N——验证永不关闭）
+python scripts/ct_literature.py --topic "osimertinib" --run --verify top --out-dir ./out
+# 非阻塞默认：background 模式后台流式核验，不拖延报告产出
+python scripts/ct_literature.py --topic "osimertinib" --run --verify background --out-dir ./out
 # v0.6.11 · 跳过标题/作者一致性层（验证仍会解析标识符）
 python scripts/ct_literature.py --topic "osimertinib" --run --no-consistency --out-dir ./out
 # v0.7.0 · 进度以 NDJSON 事件流输出到 stdout（面向 agent：--progress json 会把子模块
@@ -359,7 +366,7 @@ python scripts/ct_literature.py --topic "osimertinib" \
 
 ---
 
-**版本**：v0.9.5 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+**版本**：v0.9.7 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：medstatstar@gmail.com（张文彤 / Wintone Zhang）。
 
@@ -367,8 +374,9 @@ python scripts/ct_literature.py --topic "osimertinib" \
 
 ## 保密声明
 
-> CT 全系列技能由 20+ 个技能构成，完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。然而，由于大量技能涉及药企需要严格保密的临床试验数据、内部资讯等敏感内容，仅有不涉密的 A、B 级别技能会在 GitHub 上公开发布；涉及保密的 C、D 级别技能（如 ct-analysis 等）均设定为企业内部使用。
-
-> 若您对这些涉密技能确有实际需求，欢迎与作者联系，定制并安装相关技能。
-
+> CT 全系列技能由 20+ 个技能构成，按「输入是否涉密」分为 **A、B 两档**（network / egress / publish 为独立正交属性，详见 ct-base §11），完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。
+>
+> - **A 档（输入非涉密）**：输入为普通数据，可完全本地运行（`network=off`）或对外公开检索（`network=public-retrieval`，如 ct-registry / ct-advisor 等）；不涉及任何保密信息。A 档技能均在 GitHub 公开发布。
+> - **B 档（输入涉密）**：输入含药企需严格保密的临床试验数据 / 方案 / CRF（如 ct-analysis、ct-sdtm、ct-protocol、ct-eligibility 等）；B 档**既能本地处理**（`egress=none`，数据不出域）**也能对外公开检索**（`network=public-retrieval`，如 ct-protocol 调 ct-registry / ct-literature 抓取公开试验设计与文献作参考——仅公开查询词出域）；或需审批出站（`egress=approval-req`，如 ct-eligibility）。但**均不对外公开发布**；涉密输入绝不随包 / 出站；若有定制 / 本地部署需求，欢迎与作者联系。
+>
 > 📧 联系方式：medstatstar@gmail.com，张文彤（Wintone Zhang）

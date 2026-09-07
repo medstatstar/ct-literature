@@ -90,6 +90,12 @@ def _extract(rec):
             mesh.append(d)
     title = _strip_html(rec.get("title") or "")
     abstract = _strip_html(rec.get("abstractText") or "")
+    # Raw publisher-type tags (e.g. ["Review"], ["Systematic Review"], ["Meta-Analysis"],
+    # ["Journal Article"]). Saved verbatim under `pub_types` so downstream review-guard
+    # (meta-analysis B1 hard signal) can trust the API self-label instead of guessing
+    # from title/abstract. This is the cross-skill passthrough fix (ct-literature
+    # normalize.merge was previously dropping it).
+    pub_types = (rec.get("pubTypeList") or {}).get("pubType", []) or []
     cited = rec.get("citedByCount")
     # Full text URLs
     ftl = rec.get("fullTextUrlList") or {}
@@ -117,6 +123,7 @@ def _extract(rec):
         "mesh": mesh or None,
         "is_safety": _flag_safety(title, abstract),
         "is_cochrane": bool(journal and COCHRANE_JOURNAL_MARK in journal.lower()),
+        "pub_types": pub_types,
         "volume": ji.get("volume"),
         "issue": ji.get("issue"),
         "page": rec.get("pageInfo"),
@@ -124,10 +131,15 @@ def _extract(rec):
 
 
 def fetch(topic, review_type="all", year_from=None, year_to=None,
-          safety=False, max_results=30, run=False, out=None, cochrane=False):
+          safety=False, max_results=30, run=False, out=None, cochrane=False,
+          include_reviews=True):
+    """Fetch from Europe PMC. When include_reviews=False, append a
+    NOT (PUBLICATION_TYPE:"Review" OR "Systematic Review" OR "Meta-Analysis")
+    clause to keep review-type publications out of the result set at the
+    source — saves retrieval quota and spares the user a post-hoc cull."""
     if not run:
-        print("[PREVIEW] would query Europe PMC for topic=%r review_type=%r (use --run to execute)"
-              % (topic, review_type))
+        print("[PREVIEW] would query Europe PMC for topic=%r review_type=%r include_reviews=%r "
+              "(use --run to execute)" % (topic, review_type, include_reviews))
         return None
 
     q = topic
@@ -152,18 +164,28 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
     if cochrane:
         q += " AND " + COCHRANE_JOURNAL_FILTER
 
+    # Source-level exclusion of review-type publications. Field verified against
+    # Europe PMC's search grammar (PUBLICATION_TYPE is an indexed field; values
+    # include "Review", "Systematic Review", "Meta-Analysis", "Journal Article").
+    if not include_reviews:
+        q += (' AND NOT (PUBLICATION_TYPE:"Review" OR PUBLICATION_TYPE:"Systematic Review" '
+              'OR PUBLICATION_TYPE:"Meta-Analysis")')
+
     collected = []
+    seen_dois = set()  # 防欧洲 PMC 翻页返回同一记录
     total_hits = None  # Europe PMC's full matching count (independent of max_results)
-    page = 1
-    per = 25
+    cursor = "*"  # 第一次用 *，后续用 nextCursorMark
+    per = min(100, max_results)  # Europe PMC 支持最大 1000，但 100 平衡速度与稳定性
     while len(collected) < max_results:
         params = {
             "query": q,
             "format": "json",
             "resultType": "core",
             "pageSize": min(per, max_results - len(collected)),
-            "page": page,
         }
+        # cursorMark 深度分页（比 page 参数更可靠，不会返回重复记录）
+        if cursor and cursor != "*":
+            params["cursorMark"] = cursor
         url = BASE + "?" + urllib.parse.urlencode(params)
         try:
             j = http_utils.get_json(url, headers={"User-Agent": http_utils.UA},
@@ -177,10 +199,20 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
         if not results:
             break
         for rec in results:
-            collected.append(_extract(rec))
+            ext = _extract(rec)
+            doi = ext.get("doi", "")
+            if doi and doi in seen_dois:
+                continue
+            if doi:
+                seen_dois.add(doi)
+            collected.append(ext)
+        # 获取下一页的 cursorMark
+        cursor = j.get("nextCursorMark")
+        if not cursor:
+            break  # 没有更多结果
+        # 如果返回结果少于 per，说明已经是最后一页
         if len(results) < per:
             break
-        page += 1
         time.sleep(0.3)
 
     payload = {
@@ -214,12 +246,17 @@ def main():
     ap.add_argument("--cochrane", action="store_true",
                     help="restrict to the Cochrane Database of Systematic Reviews "
                          "(journal filter via Europe PMC)")
+    ap.add_argument("--include-reviews", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="include review-type publications in results (default: on; "
+                         "use --no-include-reviews to exclude at the source and save quota)")
     ap.add_argument("--max", type=int, default=50)
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--out")
     args = ap.parse_args()
     res = fetch(args.topic, args.review_type, args.year_from, args.year_to,
-                args.safety, args.max, args.run, args.out, cochrane=args.cochrane)
+                args.safety, args.max, args.run, args.out, cochrane=args.cochrane,
+                include_reviews=args.include_reviews)
     if res and not args.out:
         print(json.dumps(res, ensure_ascii=False, indent=2))
 

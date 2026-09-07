@@ -42,11 +42,12 @@
 | `--max` | ❌ | 50 | "每源最多检索多少篇？（默认 50）" |
 | `--with-europepmc` | ❌ | **ON** | "是否关闭 Europe PMC（MeSH 精准，默认开启）？"（⚠ 默认开：`--no-with-europepmc` 关闭） |
 | `--with-semantic-scholar` | ❌ | off | "是否开启 Semantic Scholar（引用排序增强，可能 429）？" |
-| `--with-biorxiv` / `--with-medrxiv` / `--with-arxiv` | ❌ | off | "是否纳入预印本（bioRxiv / medRxiv / arXiv）？" |
+| `--with-biorxiv` / `--with-medrxiv` | ❌ | **ON** | "是否关闭预印本（bioRxiv / medRxiv，默认开启）？"（⚠ 默认开：`--no-with-biorxiv` / `--no-with-medrxiv` 关闭） |
+| `--with-arxiv` | ❌ | off | "是否纳入 arXiv 预印本？" |
 | `--with-guidelines` | ❌ | off | "是否叠加临床指南本地语料库（12+ 源，零联网）？" |
-| `--verify` | ❌ | none | "检索后做引用验证吗？（`all`/`top` 防幻觉，耗时增加）" |
+| `--verify` | ❌ | all | "检索后做引用验证吗？（`all`/`top` 防幻觉，P0，耗时增加；默认开）" |
 
-> 数据源：OpenAlex（主源，免 key）+ Europe PMC（默认开，含预印本 SRC:PPR）+ Semantic Scholar（引用增强）+ bioRxiv/medRxiv/arXiv（预印本，opt-in）+ 指南语料库（本地）。
+> 数据源：OpenAlex（主源，免 key）+ Europe PMC（默认开，含预印本 SRC:PPR）+ bioRxiv/medRxiv（默认开，预印本直连）+ Semantic Scholar（引用增强）+ arXiv（预印本，opt-in）+ 指南语料库（本地）。
 
 ## 3. 快速模式 / Quick Mode
 
