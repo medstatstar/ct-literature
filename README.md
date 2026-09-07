@@ -8,15 +8,16 @@
 
 > **A `ct-` library skill (A-tier public-intel — non-confidential input, per ct-base §11) that retrieves published scholarly literature about a drug / disease / method, normalizes multiple public bibliographic sources into one de-duplicated evidence base, and surfaces the evidence landscape plus a CSM (cumulative safety monitoring) qualitative subset.**
 
-> 💡 **Keyless by default, but a free key lifts the cap a lot:** OpenAlex has required an API key since 2026-02-13; without one you are in the keyless pool (100 credits/day, flagged *not suitable for production*). A free key lifts this to 100k/day. Apply in ~30s — see the [First-Time FAQ](#first-time-faq) and the key-notice the skill prints automatically when no key is detected.
-
 > No commands or manual needed. Just describe your literature question **in plain language inside a chat** — the skill fetches from **OpenAlex (primary) + Europe PMC (on by default) + bioRxiv/medRxiv (on by default)**, then writes a self-contained **HTML + Excel** report. (Semantic Scholar and arXiv are opt-in via flags, not part of the default pipeline.) A-tier (non-confidential input): fully local computation, only public retrieval. **Note: your topic query is sent to the public bibliographic APIs below — see the [outbound notice](#outbound--privacy).** The skill activates **only when you explicitly ask for a literature search**; it never retrieves on its own during unrelated conversations.
 
+> 💡 **Keyless by default, but a free key lifts the cap a lot:** OpenAlex has required an API key since 2026-02-13; without one you are in the keyless pool (100 credits/day, flagged *not suitable for production*). A free key lifts this to 100k/day. Apply in ~30s — see the [First-Time FAQ](#first-time-faq) and the key-notice the skill prints automatically when no key is detected.
+
 ## Table of Contents
+
 - [Who This Is For](#who-this-is-for)
+- [How to Use It in a Chat](#how-to-use-it-in-a-chat)
 - [Data Sources](#data-sources)
 - [Why You Can Trust the Output — Anti-Hallucination](#why-you-can-trust-the-output--anti-hallucination)
-- [How to Use It in a Chat](#how-to-use-it-in-a-chat)
 - [What Can It Do — Scenarios](#what-can-it-do--scenarios)
 - [First-Time FAQ](#first-time-faq)
 - [Security & Privacy](#security--privacy)
@@ -32,44 +33,11 @@ ct-literature is part of the `ct-` clinical-trial skill family, built for three 
 - **Clinicians and nurses who take part in the hands-on conduct of trials**;
 - **Medical students who want to learn clinical-trial methodology in a structured way**.
 
-## Data Sources
-
-| Source | Key | Role |
-|---|---|---|
-| OpenAlex | recommended (free key; keyless = 100/day since 2026-02-13) | **Primary** — broad, citation-rich |
-| Europe PMC | no key | **On by default** (`--no-with-europepmc` to disable) — MEDLINE/MeSH biomedical precision |
-| Semantic Scholar | key recommended (manual form review) | **Opt-in only** `--with-semantic-scholar` — citation ranking; **not part of default sources**, skipped unless explicitly enabled with a key |
-| bioRxiv | no key (via Europe PMC PPR) | **On by default** (`--no-with-biorxiv` to disable) — biomedical preprints |
-| medRxiv | no key (via Europe PMC PPR) | **On by default** (`--no-with-medrxiv` to disable) — medical/clinical preprints |
-| arXiv | no key | Optional `--with-arxiv` — physics/CS/ML methodology breadth |
-| PROSPERO | token required (undocumented auth header) | Optional `--with-prospero` — systematic-review registry / protocol discovery; **reserved source**, degrades to a no-op skip until a working token + header is supplied |
-
-### How the sources fit together
-
-The default trio — **OpenAlex (primary) + Europe PMC (on by default) + bioRxiv/medRxiv (on by default)** — already reaches almost the entire published landscape: through these three endpoints you get PubMed / PMC, the bioRxiv / medRxiv / arXiv preprints, and the Crossref, Semantic Scholar, CORE, and Unpaywall records (Semantic Scholar records are surfaced via OpenAlex's linkage even without querying S2 directly). The extra sources are opt-in, not because the trio is incomplete, but for two practical reasons:
-
-- **Preprint freshness** — **bioRxiv / medRxiv are now on by default**, pulling preprints straight from the source instead of waiting for them to propagate through Europe PMC's PPR feed.
-- **Resilience against rate limits** — if Europe PMC is throttled (HTTP 429), the standalone preprint endpoints let you keep widening coverage without depending on a single bottleneck. (Semantic Scholar is a separate opt-in source requiring `--with-semantic-scholar` + a key, and is not part of the default pipeline.)
-
-## Why You Can Trust the Output — Anti-Hallucination
-
-LLM-powered literature tools are notorious for **inventing papers that don't exist** — fabricated DOIs, wrong PMIDs, plausible-but-fake citations. ct-literature is built to make that impossible *by construction*, through four independent guardrails plus two operational safeguards:
-
-1. **Every citation is resolved against its live source (P0, default ON).** Before a work reaches your report, its identifier is checked against the real bibliographic API: DOI → `doi.org` (HTTP 2xx), PMID → Europe PMC `EXT_ID`, OpenAlex id → `api.openalex.org/works/<id>`. Each work is tagged `citation_verified` plus a status of `verified` / `bot_blocked` / `unresolved` / `no_identifier` / `suspicious`. A **malformed DOI is flagged `suspicious`** — a likely hallucinated identifier is caught *before* it can appear in the report. Scope it with `--verify {all|top|none}`; the default `all` verifies every work.
-   - **`bot_blocked`**: some publishers (NEJM, JAMA, Wiley, MDPI…) return **403** to programmatic access even though the DOI is real. The skill reports this distinctly — it is *not* a broken link, and the work stays `verified=True`.
-2. **Title / author consistency depth (v0.6.11).** Once an identifier resolves to a live resource, the skill fetches that resource's canonical metadata (title + first-author surname) from the authoritative, bot-friendly API — **Crossref** for DOIs (bot-friendly even when the publisher blocks `doi.org`), **Europe PMC** for PMIDs, **OpenAlex** for OpenAlex ids — and compares it to the work you hold. A resolved-but-**different** paper is flagged **`mismatch`** (not `verified`); a `bot_blocked` DOI whose Crossref metadata matches is **upgraded to `verified`**. A hallucinated-but-real DOI is thus caught *even when it resolves*. Metadata-fetch failure degrades gracefully to "verified, consistency unchecked" — it never invents a mismatch. Opt out with `--no-consistency`.
-3. **Full provenance is recorded, not summarized away.** Every merged work keeps its `sources` list (which API produced it), and `evidence_log.json` stores an immutable-style audit trail: query → source → hit count → retrieved_at → verification rate. You can always trace a claim back to the exact API call that produced it.
-4. **The report never pads gaps with fluent prose.** Every factual line in the report carries a source label or an explicit `⚠️ needs official verification` marker. The skill does **not** generate plausible-looking evidence to fill holes — if a source failed or a work is unverified, that is shown, not hidden.
-
-Operational safeguards reinforce this: **Safe Preview** keeps normalization / reporting on your machine (no remote code execution), and **source-aware skip** avoids redundant re-checks while still trusting each identifier *by provenance* (a paper OpenAlex returned already carries a real OpenAlex id, so it isn't re-queried there). All of this follows the ct-base anti-hallucination spec (§17.1).
-
-**Net:** the references this skill gives you are real, resolvable, and traceable — safe to put in a slide, a protocol, or a CSR appendix, provided you validate against the official source before any regulatory submission (see the [First-Time FAQ](#first-time-faq)).
-
 ## How to Use It in a Chat
 
 ct-literature is a **conversational skill**: you simply tell the assistant what you want to look up — no commands, no parameter names to remember. Once installed as a WorkBuddy skill, you invoke it in a chat via the Skill tool; there is no extra setup, but it activates only when you call it.
 
-Below are 8 real conversational examples ordered from simple to advanced. Each shows **"You say"** and **"The assistant replies"**, plus how the report is produced. Replies are **key excerpts** of the real interaction (progress lines and details compressed); whenever your decision is needed, the skill lists the options **on screen for click-to-confirm**, or asks you to say "default / go ahead". The primary deliverables are a self-contained **`lit_report.html`** (offline, printable) and **`lit_report.xlsx`**. By default the workbook has **3 data sheets: Overview → Literature master → Evidence Log** (plus a README cover). The **Safety-related** sheet is opt-in — it appears only when you add `--safety` (the CSM qualitative subset), since the safety/CSM literature subset is a safety-oriented concern, not a default deliverable of every literature search.
+Below are 7 real conversational examples ordered from simple to advanced. Each shows **"You say"** and **"The assistant replies"**, plus how the report is produced. Replies are **key excerpts** of the real interaction (progress lines and details compressed); whenever your decision is needed, the skill lists the options **on screen for click-to-confirm**, or asks you to say "default / go ahead". The primary deliverables are a self-contained **`lit_report.html`** (offline, printable) and **`lit_report.xlsx`**. By default the workbook has **3 data sheets: Overview → Literature master → Evidence Log** (plus a README cover). The **Safety-related** sheet is opt-in — it appears only when you add `--safety` (the CSM qualitative subset), since the safety/CSM literature subset is a safety-oriented concern, not a default deliverable of every literature search.
 
 ### Example 1 · A simple literature search (with preview confirmation)
 **You say:**
@@ -115,14 +83,7 @@ Apply for a free key (~30s) at <https://openalex.org/settings/api>. Configure it
 
 **With a key, retrieval is faster AND your key never leaves your machine:** the key enters OpenAlex's keyed pool (~100k credits/day, rarely 429'd), and the OpenAlex / Semantic Scholar sources switch to **local direct-connect retrieval, bypassing the cloud** — your key is used in local memory only to call the official APIs and is never sent to any third-party service. Only keyless users go through the cloud channel (OpenAlex anonymous pool; Semantic Scholar auto-skipped).
 
-### Example 5 · Get the Excel deliverable
-**You say:**
-Can I get an Excel file as well?
-
-**Assistant replies (excerpt):**
-Yes — `--run` always produces `lit_report.xlsx` (academic-green theme, 3 data sheets by default: Overview → Literature master → Evidence Log, with KPI cards and charts; safety-relevant rows highlighted) alongside `lit_report.html`. Add `--safety` to also emit the **Safety-Related** sheet (CSM subset). Use `--no-xlsx` to skip the spreadsheet, or `--no-html` to skip the page.
-
-### Example 6 · Complex request → parameter confirmation (menu / card style)
+### Example 5 · Complex request → parameter confirmation (menu / card style)
 **You say:**
 I want to look into diabetes treatment literature.
 
@@ -134,9 +95,9 @@ Triage → **Complex** (topic = diabetes is clear, but key parameters — **lite
 
 After parameters are confirmed there are **two more gates** before any network call: ① **keyword confirmation** — the expanded keyword list (e.g. `diabetes mellitus`, Chinese/English synonym families) is shown for your review; ② **preview confirmation** — the same settings table as Example 1; the search only runs after you approve.
 
-**📌 Note:** Simple requests (topic + ≥2 parameters clear) skip the confirmation menu and go straight to preview (Example 1); Vague requests use grill-me clarification (Example 7).
+**📌 Note:** Simple requests (topic + ≥2 parameters clear) skip the confirmation menu and go straight to preview (Example 1); Vague requests use grill-me clarification (Example 6).
 
-### Example 7 · Vague request → bounded clarifying questions (grill-me style)
+### Example 6 · Vague request → bounded clarifying questions (grill-me style)
 **You say:**
 Find me something about that new cancer drug.
 
@@ -149,7 +110,7 @@ Triage → **Vague** ("that new drug" cannot be pinned down) → asks back with 
 
 After the two rounds the skill gives a **need profile + recommended settings** for confirmation: "topic osimertinib + NSCLC ｜ last 5 years ｜ all types ｜ default three sources" — approve to move to preview; if still unclear it runs with defaults and flags that in the preview.
 
-### Example 8 · On-demand batch download of legal open-access PDFs (v0.9.8, measured)
+### Example 7 · On-demand batch download of legal open-access PDFs
 **You say:**
 Download the PDFs of the 40 most recently published works in the report, and log how long it takes.
 
@@ -166,6 +127,39 @@ Downloading routes automatically: **OA / preprint direct links download locally 
 **⏱ Pace:** roughly 10–20 s per paper (incl. rate-limit backoff + cloud decode); a 40-work batch runs ~10–15 min — that is normal wait, not a hang; single direct-connect papers (Frontiers-class) usually finish in 3–5 s.
 
 ---
+
+## Data Sources
+
+| Source | Key | Role |
+|---|---|---|
+| OpenAlex | recommended (free key; keyless = 100/day since 2026-02-13) | **Primary** — broad, citation-rich |
+| Europe PMC | no key | **On by default** (`--no-with-europepmc` to disable) — MEDLINE/MeSH biomedical precision |
+| Semantic Scholar | key recommended (manual form review) | **Opt-in only** `--with-semantic-scholar` — citation ranking; **not part of default sources**, skipped unless explicitly enabled with a key |
+| bioRxiv | no key (via Europe PMC PPR) | **On by default** (`--no-with-biorxiv` to disable) — biomedical preprints |
+| medRxiv | no key (via Europe PMC PPR) | **On by default** (`--no-with-medrxiv` to disable) — medical/clinical preprints |
+| arXiv | no key | Optional `--with-arxiv` — physics/CS/ML methodology breadth |
+| PROSPERO | token required (undocumented auth header) | Optional `--with-prospero` — systematic-review registry / protocol discovery; **reserved source**, degrades to a no-op skip until a working token + header is supplied |
+
+### How the sources fit together
+
+The default trio — **OpenAlex (primary) + Europe PMC (on by default) + bioRxiv/medRxiv (on by default)** — already reaches almost the entire published landscape: through these three endpoints you get PubMed / PMC, the bioRxiv / medRxiv / arXiv preprints, and the Crossref, Semantic Scholar, CORE, and Unpaywall records (Semantic Scholar records are surfaced via OpenAlex's linkage even without querying S2 directly). The extra sources are opt-in, not because the trio is incomplete, but for two practical reasons:
+
+- **Preprint freshness** — **bioRxiv / medRxiv are now on by default**, pulling preprints straight from the source instead of waiting for them to propagate through Europe PMC's PPR feed.
+- **Resilience against rate limits** — if Europe PMC is throttled (HTTP 429), the standalone preprint endpoints let you keep widening coverage without depending on a single bottleneck. (Semantic Scholar is a separate opt-in source requiring `--with-semantic-scholar` + a key, and is not part of the default pipeline.)
+
+## Why You Can Trust the Output — Anti-Hallucination
+
+LLM-powered literature tools are notorious for **inventing papers that don't exist** — fabricated DOIs, wrong PMIDs, plausible-but-fake citations. ct-literature is built to make that impossible *by construction*, through four independent guardrails plus two operational safeguards:
+
+1. **Every citation is resolved against its live source (P0, default ON).** Before a work reaches your report, its identifier is checked against the real bibliographic API: DOI → `doi.org` (HTTP 2xx), PMID → Europe PMC `EXT_ID`, OpenAlex id → `api.openalex.org/works/<id>`. Each work is tagged `citation_verified` plus a status of `verified` / `bot_blocked` / `unresolved` / `no_identifier` / `suspicious`. A **malformed DOI is flagged `suspicious`** — a likely hallucinated identifier is caught *before* it can appear in the report. Scope it with `--verify {all|top|none}`; the default `all` verifies every work.
+   - **`bot_blocked`**: some publishers (NEJM, JAMA, Wiley, MDPI…) return **403** to programmatic access even though the DOI is real. The skill reports this distinctly — it is *not* a broken link, and the work stays `verified=True`.
+2. **Title / author consistency depth (v0.6.11).** Once an identifier resolves to a live resource, the skill fetches that resource's canonical metadata (title + first-author surname) from the authoritative, bot-friendly API — **Crossref** for DOIs (bot-friendly even when the publisher blocks `doi.org`), **Europe PMC** for PMIDs, **OpenAlex** for OpenAlex ids — and compares it to the work you hold. A resolved-but-**different** paper is flagged **`mismatch`** (not `verified`); a `bot_blocked` DOI whose Crossref metadata matches is **upgraded to `verified`**. A hallucinated-but-real DOI is thus caught *even when it resolves*. Metadata-fetch failure degrades gracefully to "verified, consistency unchecked" — it never invents a mismatch. Opt out with `--no-consistency`.
+3. **Full provenance is recorded, not summarized away.** Every merged work keeps its `sources` list (which API produced it), and `evidence_log.json` stores an immutable-style audit trail: query → source → hit count → retrieved_at → verification rate. You can always trace a claim back to the exact API call that produced it.
+4. **The report never pads gaps with fluent prose.** Every factual line in the report carries a source label or an explicit `⚠️ needs official verification` marker. The skill does **not** generate plausible-looking evidence to fill holes — if a source failed or a work is unverified, that is shown, not hidden.
+
+Operational safeguards reinforce this: **Safe Preview** keeps normalization / reporting on your machine (no remote code execution), and **source-aware skip** avoids redundant re-checks while still trusting each identifier *by provenance* (a paper OpenAlex returned already carries a real OpenAlex id, so it isn't re-queried there). All of this follows the ct-base anti-hallucination spec (§17.1).
+
+**Net:** the references this skill gives you are real, resolvable, and traceable — safe to put in a slide, a protocol, or a CSR appendix, provided you validate against the official source before any regulatory submission (see the [First-Time FAQ](#first-time-faq)).
 
 ## What Can It Do — Scenarios
 
