@@ -214,7 +214,7 @@ The skill covers published-evidence retrieval across the clinical-trial lifecycl
 
 **Q: What's the difference from `ct-safety`?** A: `ct-literature` = published *qualitative* evidence (papers / reviews / case reports); `ct-safety` = structured FAERS disproportionality (PRR / ROR / IC). They are explicitly distinct data types — literature complements but does not replace FAERS.
 
-**Q: On a Chinese system, is the output in Chinese?** A: Yes. Output language follows your OS setting by default (Chinese on a Chinese-OS, English otherwise), and you can force-switch anytime with one sentence (e.g. "switch to English").
+**Q: On a Chinese system, is the output in Chinese?** A: Yes. **Conversation answers and the reports** (HTML / Excel) follow your OS setting by default (Chinese on a Chinese-OS, English otherwise), and you can force-switch anytime with one sentence (e.g. "switch to English"). **Console progress lines** (fetch / download process hints) are Chinese auxiliary output — runtime noise, they do not affect the language of the answers or deliverables.
 
 **Q: Semantic Scholar keeps failing / being skipped?** A: The S2 key requires a manual form review (not auto-issued, waits after applying), so it is usually absent short-term. When no key is configured the source is **skipped entirely** (no network request) rather than attempting-and-degrading. Configure it later if you need citation ranking.
 
