@@ -138,7 +138,7 @@ MAX_TOTAL_ITEMS = 50
 # sub-batch 发送间隔（秒）：避免 coze 端高频请求触发限流（2026-09-07 用户要求 ≥5 秒）
 COZE_BATCH_INTERVAL = 5
 # 技能版本号回退常量（SKILL.md 读取失败时使用；ct-base coze_io_contract §1.2）
-_SKILL_VERSION_FALLBACK = "0.9.5"
+_SKILL_VERSION_FALLBACK = "1.0.0"
 
 
 def _skill_version() -> str:

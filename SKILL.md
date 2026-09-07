@@ -3,7 +3,7 @@ slug: ct-literature
 name: ct-literature
 displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
-version: 0.9.8
+version: 1.0.0
 invocable: true
 summary: 检索公开学术文献（OpenAlex + Europe PMC + 预印本 + arXiv），归一化合并为证据基础与 CSM 定性安全性文献集，含工作台对话界面与 PDF 直链解码。
 license: MIT
