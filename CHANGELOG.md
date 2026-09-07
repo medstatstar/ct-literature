@@ -11,6 +11,8 @@ ct- library convention (A-tier public-intel skill — non-confidential input per
 
 - **§16.6 对话示例实测留痕（2026-09-07）**：本次整改会话已实测 Simple 全链路——真实输入「检索奥希替尼在 NSCLC 的安全性文献 2018–2025」（triage→§4.2 预览确认→§12 关键字门→`--run`→verify all 100/103→HTML/XLSX 交付→最新 40 篇 PDF 批量下载 36 成功→PDF 路径回写 Excel），产出与本技能示例所展示同类效果 ✓。README 双份示例 6（Complex 弹菜单）与示例 7（Vague/grill-me）的**逐字对话实录**列入发布执行步骤补测（不虚构留痕）。
 
+- **README 双份内容整理（2026-09-07，§16.6 配套）**：① 清除**悬空内部引用**——旧编号遗留的「见 §7」8 处改为 FAQ / 出站锚点链接（残留 § 引用全部带 ct-base 前缀，属外部规范引用）；② **对话示例重修**：示例 1 改为含预览确认的真实节选（对齐检索主流程）、示例 2 改演示 review-type 过滤（原 `--safety` 演示并入示例 1，FAERS 区别说明随之迁移）、示例 6 Complex 改为卡片式两问确认 +「解释差异」入口 + 关键字门/预览两道把关、示例 7 Vague 补全两轮有界 grill-me 与「需求画像+推荐参数」收尾、示例 8 PDF 下载重修为 **v0.9.8 实测体验**（下载前等待提示 → 用时汇报 → Excel「PDF 本地路径」回填 → 付费墙如实标注）；③ 回复标签统一「节选 / excerpt」（8 示例一致）；④ FAQ 修正过时默认值「每源 30 篇」→ **50**（与 `--max` 默认一致）；⑤ PDF 下载 FAQ 从「解析链接」重写为「下载到盘」体验（节奏/落盘/Excel 回填/成功率边界/超 50 拒批）；⑥ 场景索引补「批量下载 OA PDF」行。中英双份逐项对称（8/8 示例、默认值、表格闭合均已校验）。
+
 - **ClawHub 安全审计整改与留痕（§16.0，2026-09-07 对比当前发行版）**：① **[HIGH] `--verify-top-n`（design-so 留痕 + 措辞整改）**——该参数语义是 `--verify top` 模式验证前 N 篇的**数量**，非关闭验证（验证永不关闭，v0.9.6 已移除 bypass）；整改：argparse help 显式注明 "does NOT disable verification"、README 双份示例不再内联该参数（默认 top-15 表述），workbench 引用随整目录排除不发布；保留参数为设计所需，审计判定留痕；② **[MEDIUM] guidelines 语料纯度（措辞整改）**——SKILL.md guideline 段新增 Corpus boundary 声明：语料含 reviews/consensus/adherence 等背景条目，非权威指南，须回链解析源；`retrieved:false` 为诚实占位非虚构引用；③ **[MEDIUM] `.env` 引导写 key（design-so 留痕）**——README 已含"聊天消息可能被平台留存"警示与自行配置三路径，key 仅本地、符合全库 key 治理；④ **UNVERIFIED 6 项人工核对**：Tp4/双 Description-Behavior（bug-report 出站）——README 已披露 11-key 脱敏信封 + 端点 + opt-in；Context-Inappropriate 可逆混淆静态凭据——符合 ct-base §5 公用凭据 XOR+base64 规范；guidelines pointer 占位——SKILL.md 已声明 pointer-only；Ssd3（changelog key 指引）——同 ③ 留痕。
 
 
