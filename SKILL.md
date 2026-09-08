@@ -3,9 +3,9 @@ slug: ct-literature
 name: ct-literature
 displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
-version: 1.0.0
+version: 1.0.1
 invocable: true
-summary: 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。
+summary: 检索已发表学术文献（OpenAlex、Europe PMC、预印本、arXiv 等多源），合并去重形成证据基础，并支持安全性文献定性筛查与 OA 全文获取。
 license: MIT
 description: "Search public scholarly literature (OpenAlex as primary source + Europe PMC / MeSH biomedical precision [on by default] + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize and de-duplicate the results, produces a qualitative CSM safety-literature subset, and assists in downloading open-access (OA) paper PDFs. / 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。"
 triggers:
@@ -53,7 +53,7 @@ The four A-tier public-intel skills (non-confidential input, `network=public-ret
 | `ct-safety` | Is a drug–event over-reported (signal)? | FAERS cases | Adverse-event databases |
 | `ct-pipeline` | Aggregate the above into a strategic intel brief | Consumes the three JSONs | Public-intel layer |
 
-**Boundaries:** `ct-registry` never fetches paper full-text/abstracts; `ct-literature` never fetches registry structured metadata. `ct-literature --safety` surfaces *published* safety literature — **qualitative**, must NOT replace `ct-safety`'s FAERS disproportionality. Not sure which skill? Route via `ct-advisor`; full competitive-intel picture → `ct-pipeline` directly (ct-base/BASE.md §15).
+**Boundaries:** `ct-registry` never fetches paper full-text/abstracts; `ct-literature` never fetches registry structured metadata. `ct-literature --safety` surfaces *published* safety literature — **qualitative**, must NOT replace `ct-safety`'s FAERS disproportionality. Not sure which skill? Route via `ct-advisor`; full competitive-intel picture → `ct-pipeline` directly (§15).
 
 ## Data Sources
 
@@ -105,7 +105,7 @@ Guidelines are **version-pinned** reference standards — at analysis time we re
 | MeSH terms | Europe PMC | Biomedical concept indexing |
 | Concepts / Keywords / Funders | OpenAlex | Topic classification + COI signals |
 | PubMed/PMC ID, OA full-text URL, complete abstract | All | Direct links + full evidence preservation |
-| Structured output | — | JSON + Markdown + Excel workbook (ct-base `excel_style`). Default sheets: README → Overview → Works → Evidence Log. `Safety-Related` sheet appears **only with `--safety`**. |
+| Structured output | — | JSON + Markdown + Excel workbook (`excel_style`). Default sheets: README → Overview → Works → Evidence Log. `Safety-Related` sheet appears **only with `--safety`**. |
 | Chained invocation | — | → `ct-pipeline` / `ct-protocol` / `ct-csr` |
 | Resilient fetch (retry + backoff) | All | Honors `Retry-After`; OpenAlex Bearer via key |
 | Safe link rendering | All | `_normalize_link()` sanitises every hyperlink |
@@ -113,7 +113,7 @@ Guidelines are **version-pinned** reference standards — at analysis time we re
 | PRISMA screening funnel | All | `--prisma` deterministic rule screen → SVG funnel in HTML |
 | Relevance scoring | All | `--rank relevance` → `relevance_score` (title .6 + abstract .4) |
 | Obsidian / Zotero integration | All | `--obsidian` notes + MOC; `--zotero` CSV/RIS |
-| **P0 · Citation verification** | All | Anti-hallucination (ct-base §17.1). `--verify {all\|top\|none}`; source-aware skip; DOI cross-checked via doi.org; title/author consistency vs Crossref/Europe PMC/OpenAlex; flags `verified/bot_blocked/mismatch/unresolved/...` |
+| **P0 · Citation verification** | All | Anti-hallucination (§17.1). `--verify {all\|top\|none}`; source-aware skip; DOI cross-checked via doi.org; title/author consistency vs Crossref/Europe PMC/OpenAlex; flags `verified/bot_blocked/mismatch/unresolved/...` |
 | **P0 · Evidence provenance log** | All | `evidence_log.json/.md` + workbook sheet + HTML block: query→source→hits→retrieved_at→verification rate |
 | **P1 · PROSPERO registry** | Review register | `--with-prospero` (opt-in, key-gated, **reserved**) — dormant no-op skip without token; never claimed functional |
 | **G · Guideline corpus** | Guideline orgs | `--with-guidelines` → local pointer corpus (see above) |
@@ -133,9 +133,9 @@ Guidelines are **version-pinned** reference standards — at analysis time we re
 **Standard deliverables = HTML + Excel only.** Present `lit_report.html` to the user as the result, and remind them of the optional add-ons below (the report itself shows a "还能做什么 / Options" strip with these hints).
 
 - Per-source payloads: `openalex.json` / `europepmc.json` / `semantic_scholar.json` / `biorxiv.json` / `medrxiv.json` / `arxiv.json` (enabled only)
-- `lit_report.xlsx` — Excel delivery (ct-base `excel_style`; `--no-xlsx` to skip): Overview → Literature master → Safety-related, KPI cards, charts, `is_safety` amber highlighting. **The complete result — user can keep filtering / pivoting on top of it.**
+- `lit_report.xlsx` — Excel delivery (`excel_style`; `--no-xlsx` to skip): Overview → Literature master → Safety-related, KPI cards, charts, `is_safety` amber highlighting. **The complete result — user can keep filtering / pivoting on top of it.**
 - `lit_report.html` — self-contained HTML report (inline CSS, offline; `--no-html` to skip); inline-SVG PRISMA funnel when `--prisma`. **Default deliverable to open.**
-- **On-demand citation formats** (default OFF since v0.9.7 — ask the user or use `--export-bib`): `references.bib` / `references.ris` / `references_<style>.md` (Zotero RIS / BibTeX / APA etc.). OA-PDF downloads are likewise on request: `--download-pdf` attempts **ALL** records that carry an OA URL or DOI (batched, legal OA sources only); users may instead ask for specific DOI / PMID(s) or the top-N works. **Server-side supplement chain (since v0.9.7)**: when the A-path direct links all fail, the coze endpoint runs a supplement chain — Unpaywall best-OA → Europe PMC PMC-OA → PPR preprints (bioRxiv/medRxiv, author-verified) — before the (off) browser fallback; the local skill only calls, it no longer implements multi-channel download algorithms.
+- **On-demand citation formats** (default OFF — ask the user or use `--export-bib`): `references.bib` / `references.ris` / `references_<style>.md` (Zotero RIS / BibTeX / APA etc.). OA-PDF downloads are likewise on request: `--download-pdf` attempts **ALL** records that carry an OA URL or DOI (batched, legal OA sources only); users may instead ask for specific DOI / PMID(s) or the top-N works. **Server-side supplement chain**: when the A-path direct links all fail, the coze endpoint runs a supplement chain — Unpaywall best-OA → Europe PMC PMC-OA → PPR preprints (bioRxiv/medRxiv, author-verified) — before the (off) browser fallback; the local skill only calls, it no longer implements multi-channel download algorithms.
 - `obsidian/` (`--obsidian`) — per-paper notes + `Literature MOC.md`; `zotero.csv` / `zotero.ris` (`--zotero`)
 - `.merged.json` gains additive `prisma` + per-work `relevance_score` / `prisma_included` blocks
 
@@ -150,7 +150,7 @@ See `references/sop.md` for the full command catalogue.
 ## ⚠️ Safety
 
 - Default **SAFE PREVIEW**: scripts only generate / display; network requests run only with explicit `--run`.
-- Reads **public publications ONLY**, zero confidential research / subject data input (A-tier — non-confidential input, per ct-base §11; API keys are local config, never research data).
+- Reads **public publications ONLY**, zero confidential research / subject data input (A-tier — non-confidential input, per §11; API keys are local config, never research data).
 - `--safety` literature is **qualitative** — never feed it into FAERS disproportionality; it only corroborates `ct-safety` qualitatively.
 - Output is for reference / background only, not a regulatory submission.
 
@@ -191,7 +191,7 @@ A cross-database planning layer (Embase / Cochrane / Web of Science + preprint T
 ## Natural-Language Dialogue — Triage-First (mandatory)
 
 NL dialogue MUST triage before choosing the interaction shape. Mandatory per
-ct-base §6.2 + `references/search_menu.md` — this step is never skipped.
+§6.2 + `references/search_menu.md` — this step is never skipped.
 
 ### Step 0 Triage (four buckets, run on the user's first message)
 
@@ -237,7 +237,7 @@ DEFAULT path on follow-ups:
 
 ```bash
 echo '{"prev":{previous full spec},"cur":{this-turn partial}}' \
-  | python ct-base/scripts/merge_spec.py
+  | python scripts/merge_spec.py
 ```
 
 Feed the `merged` output into the §12 keyword gate. `prev` comes from the
@@ -260,7 +260,7 @@ user request → Step 0 Triage
   └─ Middle → answer directly (no menu)
 ```
 
-## Bug Reporting (ct-base §20.3, adapter: `adapters/bug_report.py`)
+## Bug Reporting (§20.3, adapter: `adapters/bug_report.py`)
 
 - **Trigger:** (A) explicit user request ("report a bug" / "反馈问题" / "提交错误报告") → straight to two-stage confirmation, unlimited per session; (B) strong signal (unexpected non-zero exit / engine or compute error / user explicitly questions the result) **and** the same operation was retried ≥1 → at most 1 unsolicited proposal/session.
 - **Two-stage confirmation (2026-08-21):** ① propose-with-preview — bilingual `confirm_prompt` together with the full sanitized report (invite a problem description; re-render before consent) → ② on explicit consent, `send_to_endpoint` (auto action=report, endpoint `https://ct-bugreport.coze.site/run`, token = §5 public credential). Decline → never re-propose this session.

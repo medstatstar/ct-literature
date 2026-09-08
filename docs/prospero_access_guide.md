@@ -73,7 +73,7 @@ ETag: W/"4b-Q35T1btJfnfTn7nlWLtPp9x6qB4"   （与 A/B 完全相同）
 |---|---|---|---|---|
 | **A. 申请官方 API 访问** | 联系 CRD/York，说明用途，索取 header 名 + token | 最正统，但无公开表单，需邮件沟通，周期不确定 | 拿到后只需在 `fetch_prospero.py` 接上 header 名即可转正 | 低；合规、稳定、可溯源（反幻觉策略友好） |
 | **B. 账号登录 + session 调** | 注册免费账号，浏览器登录取 session/cookie，再调 `/api/` | 不确定能绕过网关（网关可能仍要特定 header） | 需引入浏览器/登录态管理，偏离"纯 API、零浏览器"设计 | 中；session 易失效，运维重 |
-| **C. 直接 scrape 公开页** | 不走 `/api/`，解析 `crd.york.ac.uk/PROSPERO/` 网站搜索结果 HTML | 现在可用（公开页无需 token） | 需新增 `fetch_prospero_scrape.py` + HTML 解析器，且 HTML 结构会变 | 高；非结构化、脆弱、违反 ct-base 反幻觉/结构化契约 |
+| **C. 直接 scrape 公开页** | 不走 `/api/`，解析 `crd.york.ac.uk/PROSPERO/` 网站搜索结果 HTML | 现在可用（公开页无需 token） | 需新增 `fetch_prospero_scrape.py` + HTML 解析器，且 HTML 结构会变 | 高；非结构化、脆弱、违反反幻觉/结构化契约 |
 
 **我的建议**：优先走 **A**，B 作为备选，C 不推荐（除非官方接口长期不可用且你确实急需）。
 

@@ -137,6 +137,39 @@ def _display_source(source: str) -> str:
     """Coze 小写 source → 本地规范显示名（未知源原样返回）。"""
     return _SOURCE_DISPLAY.get(source, source)
 
+
+# ── Coze 侧文本兜底清洗 ────────────────────────────────────────────────────
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"[ \t]{2,}")
+
+
+def _sanitize_text(s):
+    """Strip residual HTML tags from a Coze-side text field (<h4>, <i>, …).
+
+    WHY: Europe PMC serves structured abstracts (Purpose / Methods / Results headings)
+    as HTML. The local EuropePMC fetcher strips them via its own `_strip_html`, but the
+    Coze server-side node passes raw `<h4>…</h4>` through — 2026-09-08 measurement:
+    18/56 merged works had tag residue on the `--online` path vs 0/56 locally. Cleaning
+    at the Coze egress equalizes both paths. Idempotent: once the Coze node also strips,
+    this becomes a no-op.
+    """
+    if not isinstance(s, str) or "<" not in s:
+        return s
+    s = _TAG_RE.sub(" ", s)
+    return _WS_RE.sub(" ", s).strip()
+
+
+def _sanitize_works(works):
+    """Apply `_sanitize_text` to every work's title / abstract_snippet."""
+    if not isinstance(works, list):
+        return works
+    for w in works:
+        if isinstance(w, dict):
+            for k in ("title", "abstract_snippet"):
+                if isinstance(w.get(k), str):
+                    w[k] = _sanitize_text(w[k])
+    return works
+
 # 技能版本号回退常量
 _SKILL_VERSION_FALLBACK = "0.9.7"
 
@@ -360,6 +393,7 @@ def _parse_run_response(data, source):
     if "projects" in data and "works" not in data:
         data["works"] = data.pop("projects")
         data["count"] = data.get("total_count", len(data["works"]))
+    _sanitize_works(data.get("works"))
     data["source"] = _display_source(source)
     return data
 
@@ -461,7 +495,7 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
     # HTTP POST to Coze —— 主路径 /stream_run（SSE 流式），回退 /run（见下方 except）
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     try:
-        projects = _coze_stream_once(body, timeout)
+        projects = _sanitize_works(_coze_stream_once(body, timeout))
         if projects is not None:
             # 流式成功：projects 已是从 workflow_end/output 提取的列表（兼容 projects
             # 列表 / project_list 字符串 / 字典三种形态）。total_count 取实际返回条数

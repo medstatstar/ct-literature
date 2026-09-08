@@ -1,6 +1,6 @@
 # Language Policy / 双语语言策略
 
-> This file is the detailed companion to the "Language" section in SKILL.md. Applicability: this policy applies to **ct- skills that are statistical-analysis related AND intended for GitHub publication** (e.g. ct-samplesize). The ct-base scaffold itself ships the bilingual setup for library consistency; ct- skills that are NOT published / for internal use only default to Chinese-only and need no bilingual content. / 本文件是 `SKILL.md` 中「Language / 语言」段的详版补充。适用范围：本策略适用于 **ct- 系列中统计分析相关、且准备发布到 GitHub 的技能**（如 ct-samplesize）。ct-base 作为库底座采用双语脚手架以保持一致；不发布、仅自用的 ct- 技能默认纯中文，无需双语。
+> This file is the detailed companion to the "Language" section in SKILL.md. Applicability: this policy applies to **ct- skills that are statistical-analysis related AND intended for GitHub publication** (e.g. ct-samplesize). The library scaffold itself ships the bilingual setup for consistency; ct- skills that are NOT published / for internal use only default to Chinese-only and need no bilingual content. / 本文件是 `SKILL.md` 中「Language / 语言」段的详版补充。适用范围：本策略适用于 **ct- 系列中统计分析相关、且准备发布到 GitHub 的技能**（如 ct-samplesize）。库底座采用双语脚手架以保持一致；不发布、仅自用的 ct- 技能默认纯中文，无需双语。
 
 ## Three core rules / 三条核心规则
 

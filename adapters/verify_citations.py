@@ -185,10 +185,28 @@ def _resolve_openalex(oid, timeout=15):
 _TITLE_THRESHOLD = 0.80  # normalized title similarity needed to call it "the same paper"
 
 
+def _fold_unicode(s):
+    """NFKD-fold a string down to ASCII letters: 'Jänne' -> 'janne', 'Núñez' -> 'nunez'.
+
+    WHY: the old pipeline ran ``re.sub(r"[^a-z\\s]", " ", ...)`` directly on raw Unicode,
+    so any diacritic became a *word break* — "Jänne" collapsed to ``"j nne"`` and could
+    never match token "janne" from the resolved metadata. That silently flagged real
+    papers (2026-09-08: NEJM FLAURA2 OS, doi 10.1056/nejmoa2510308, Pasi A. Jänne) as
+    ``mismatch`` / "possible hallucinated id". Folding first keeps ASCII behaviour
+    byte-identical while making accented surnames comparable.
+    """
+    try:
+        import unicodedata
+        decomposed = unicodedata.normalize("NFKD", str(s))
+        return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    except Exception:
+        return str(s)
+
+
 def _norm_title(s):
     if not s:
         return ""
-    s = str(s).lower()
+    s = _fold_unicode(s).lower()
     s = re.sub(r"[^a-z0-9\s]", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
@@ -196,7 +214,7 @@ def _norm_title(s):
 def _norm_name(s):
     if not s:
         return ""
-    s = str(s).lower()
+    s = _fold_unicode(s).lower()
     s = re.sub(r"[^a-z\s]", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
@@ -244,8 +262,15 @@ def _author_ok(work_authors, meta_surname):
         return None
     if ms in toks:
         return True
-    # fallback: fuzzy match against the longest token (minor normalization drift)
-    return difflib.SequenceMatcher(None, ms, longest).ratio() >= 0.85
+    # Space-stripped equality catches residual token splits ("j nne" vs "jnne").
+    if ms.replace(" ", "") in {t.replace(" ", "") for t in toks}:
+        return True
+    # Fuzzy fallback scored against EVERY token, keep the best score. The old code
+    # only compared against the LONGEST token — for "Pasi A. Jänne" that is the given
+    # name "pasi", so any First-Initial-Last ordering missed the surname and flipped
+    # a genuine paper to `mismatch`.
+    best = max((difflib.SequenceMatcher(None, ms, t).ratio() for t in toks), default=0.0)
+    return best >= 0.85
 
 
 def _consistency(work, meta):

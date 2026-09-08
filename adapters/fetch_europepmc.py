@@ -111,7 +111,15 @@ def _extract(rec):
         "authors": authors,
         "affiliations": affiliations[:5] or None,
         "year": int(rec["pubYear"]) if rec.get("pubYear") and str(rec.get("pubYear")).isdigit() else None,
-        "publication_date": rec.get("printPublicationDate") or rec.get("dateOfPublication"),
+        # BUGFIX 2026-09-08: `printPublicationDate` / `dateOfPublication` live under the
+        # nested `journalInfo` object, NOT at the top level of a result record — so both
+        # `rec.get(...)` lookups always returned None and every Europe PMC record shipped
+        # with an empty publication_date. `firstPublicationDate` is the real top-level
+        # field (verified live: doi 10.1016/j.cellsig.2026.112850 -> "2026-08-26"); the
+        # journalInfo values are kept as fallbacks for records without it.
+        "publication_date": (rec.get("firstPublicationDate")
+                             or (rec.get("journalInfo") or {}).get("printPublicationDate")
+                             or (rec.get("journalInfo") or {}).get("dateOfPublication")),
         "publication": journal,
         "journal_iso": journal_iso,
         "type": "article",

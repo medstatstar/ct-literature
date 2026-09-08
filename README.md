@@ -6,7 +6,7 @@
 <img src="assets/icon.svg" width="240" height="240" alt="ct-literature logo"/>
 </div>
 
-> **A `ct-` library skill (A-tier public-intel — non-confidential input, per ct-base §11) that retrieves published scholarly literature about a drug / disease / method, normalizes multiple public bibliographic sources into one de-duplicated evidence base, and surfaces the evidence landscape plus a CSM (cumulative safety monitoring) qualitative subset.**
+> **A `ct-` library skill (A-tier public-intel — non-confidential input) that retrieves published scholarly literature about a drug / disease / method, normalizes multiple public bibliographic sources into one de-duplicated evidence base, and surfaces the evidence landscape plus a CSM (cumulative safety monitoring) qualitative subset.**
 
 > No commands or manual needed. Just describe your literature question **in plain language inside a chat** — the skill fetches from **OpenAlex (primary) + Europe PMC (on by default) + bioRxiv/medRxiv (on by default)**, then writes a self-contained **HTML + Excel** report. (Semantic Scholar and arXiv are opt-in via flags, not part of the default pipeline.) A-tier (non-confidential input): fully local computation, only public retrieval. **Note: your topic query is sent to the public bibliographic APIs below — see the [outbound notice](#outbound--privacy).** The skill activates **only when you explicitly ask for a literature search**; it never retrieves on its own during unrelated conversations.
 
@@ -41,10 +41,10 @@ Below are 7 real conversational examples ordered from simple to advanced. Each s
 
 ### Example 1 · A simple literature search (with preview confirmation)
 **You say:**
-Search published literature on osimertinib in NSCLC, 2018–2025, focused on adverse events / post-marketing safety.
+> Search published literature on osimertinib in NSCLC, 2018–2025, focused on adverse events / post-marketing safety.
 
 **Assistant replies (excerpt):**
-Recognized as a **simple request** (topic + year + safety angle all clear) → straight to a preview for your confirmation:
+> Recognized as a **simple request** (topic + year + safety angle all clear) → straight to a preview for your confirmation:
 
 | Setting | Value |
 |---|---|
@@ -60,35 +60,35 @@ Confirmed → keyword list reviewed → search runs (~30–60 s):
 
 ### Example 2 · Evidence-synthesis layer only (systematic reviews / meta-analyses)
 **You say:**
-Same topic, but keep only systematic reviews and meta-analyses — I want the synthesis, not single trials.
+> Same topic, but keep only systematic reviews and meta-analyses — I want the synthesis, not single trials.
 
 **Assistant replies (excerpt):**
-Restricting `--review-type systematic-review/meta-analysis` and re-searching. **3 systematic reviews hit** (after cross-source de-dup) — listed separately with full abstracts and citation verification. If a type has zero hits, the skill says "no works of this type" rather than padding with near-matches.
+> Restricting `--review-type systematic-review/meta-analysis` and re-searching. **3 systematic reviews hit** (after cross-source de-dup) — listed separately with full abstracts and citation verification. If a type has zero hits, the skill says "no works of this type" rather than padding with near-matches.
 
 **📌 Safety subset vs FAERS is a key distinction:** `--safety` (CSM qualitative subset = published case reports / PV articles) and `ct-safety` (structured FAERS signal detection, PRR / ROR / IC) are **clearly different data types** — literature complements but does not replace FAERS.
 
 ### Example 3 · Broader coverage (Europe PMC + Semantic Scholar)
 **You say:**
-Also pull MEDLINE via Europe PMC and citation-rank via Semantic Scholar.
+> Also pull MEDLINE via Europe PMC and citation-rank via Semantic Scholar.
 
 **Assistant replies (excerpt):**
-Adding `--with-europepmc` (MeSH precision) and `--with-semantic-scholar` (citation ranking). S2 is skipped automatically if no key or on 429 — OpenAlex + Europe PMC still produce results.
+> Adding `--with-europepmc` (MeSH precision) and `--with-semantic-scholar` (citation ranking). S2 is skipped automatically if no key or on 429 — OpenAlex + Europe PMC still produce results.
 
 ### Example 4 · Configure the OpenAlex key (self-config)
 **You say:**
-How do I lift the 100/day limit for large searches?
+> How do I lift the 100/day limit for large searches?
 
 **Assistant replies (excerpt):**
-Apply for a free key (~30s) at <https://openalex.org/settings/api>. Configure it yourself via (a) adding `OPENALEX_API_KEY=<key>` to `ct-literature/.env`, (b) exporting an `OPENALEX_API_KEY` environment variable, or (c) passing `--openalex-key <key>` on the command line. **Note:** chat messages may be logged or retained by the platform — for maximum secrecy use the self-config routes (a)–(c). If you prefer, you can also ask the assistant to write the key into `ct-literature/.env` for you — it stores the key locally, never echoes it back, never logs it, and sends it only over HTTPS to the official OpenAlex API.
+> Apply for a free key (~30s) at <https://openalex.org/settings/api>. Configure it yourself via (a) adding `OPENALEX_API_KEY=<key>` to `ct-literature/.env`, (b) exporting an `OPENALEX_API_KEY` environment variable, or (c) passing `--openalex-key <key>` on the command line. **Note:** chat messages may be logged or retained by the platform — for maximum secrecy use the self-config routes (a)–(c). If you prefer, you can also ask the assistant to write the key into `ct-literature/.env` for you — it stores the key locally, never echoes it back, never logs it, and sends it only over HTTPS to the official OpenAlex API.
 
 **With a key, retrieval is faster AND your key never leaves your machine:** the key enters OpenAlex's keyed pool (~100k credits/day, rarely 429'd), and the OpenAlex / Semantic Scholar sources switch to **local direct-connect retrieval, bypassing the cloud** — your key is used in local memory only to call the official APIs and is never sent to any third-party service. Only keyless users go through the cloud channel (OpenAlex anonymous pool; Semantic Scholar auto-skipped).
 
 ### Example 5 · Complex request → parameter confirmation (menu / card style)
 **You say:**
-I want to look into diabetes treatment literature.
+> I want to look into diabetes treatment literature.
 
 **Assistant replies (excerpt):**
-Triage → **Complex** (topic = diabetes is clear, but key parameters — **literature type / year / sources** — are still open). The skill does not decide for you; it lists what it detected and asks you to confirm two things on screen:
+> Triage → **Complex** (topic = diabetes is clear, but key parameters — **literature type / year / sources** — are still open). The skill does not decide for you; it lists what it detected and asks you to confirm two things on screen:
 
 > Detected: topic `diabetes treatment` ｜ To confirm: ① **Literature type** (all types [recommended] / systematic reviews + meta-analyses only / SR + RCT + case reports…) ② **Run now?** (✅ run / ✏️ adjust parameters / ❌ cancel)
 > Not sure about the differences? Say "explain the differences between these choices in detail" — it explains the clinical / statistical meaning first, then you decide.
@@ -99,10 +99,10 @@ After parameters are confirmed there are **two more gates** before any network c
 
 ### Example 6 · Vague request → bounded clarifying questions (grill-me style)
 **You say:**
-Find me something about that new cancer drug.
+> Find me something about that new cancer drug.
 
 **Assistant replies (excerpt):**
-Triage → **Vague** ("that new drug" cannot be pinned down) → asks back with **bounded grill-me (max 2 rounds)**, each round with a recommended default; if it is still unclear it falls back to defaults + a preview reminder:
+> Triage → **Vague** ("that new drug" cannot be pinned down) → asks back with **bounded grill-me (max 2 rounds)**, each round with a recommended default; if it is still unclear it falls back to defaults + a preview reminder:
 
 > **Round 1:** "Can't recall the name — that's fine. Which **class** is it? A 3rd-gen EGFR-TKI (e.g. osimertinib), an immune-checkpoint inhibitor (e.g. pembrolizumab), or a target (PD-1 / EGFR)? Or paste the brand name / indication and I'll reverse-look it up."
 > You: osimertinib, the lung-cancer one.
@@ -112,10 +112,10 @@ After the two rounds the skill gives a **need profile + recommended settings** f
 
 ### Example 7 · On-demand batch download of legal open-access PDFs
 **You say:**
-Download the PDFs of the 40 most recently published works in the report, and log how long it takes.
+> Download the PDFs of the 40 most recently published works in the report, and log how long it takes.
 
 **Assistant replies (excerpt):**
-Takes the newest 40 works from the 103-work merged set (sorted by publication date, newest first) and starts the batch download — **before starting it tells you the expected pace**:
+> Takes the newest 40 works from the 103-work merged set (sorted by publication date, newest first) and starts the batch download — **before starting it tells you the expected pace**:
 
 > Starting batch download of 40 PDFs: **roughly 10–20 s per paper** (network / rate limits vary) — please be patient, no action needed.
 
@@ -151,13 +151,13 @@ The default trio — **OpenAlex (primary) + Europe PMC (on by default) + bioRxiv
 
 LLM-powered literature tools are notorious for **inventing papers that don't exist** — fabricated DOIs, wrong PMIDs, plausible-but-fake citations. ct-literature is built to make that impossible *by construction*, through four independent guardrails plus two operational safeguards:
 
-1. **Every citation is resolved against its live source (P0, default ON).** Before a work reaches your report, its identifier is checked against the real bibliographic API: DOI → `doi.org` (HTTP 2xx), PMID → Europe PMC `EXT_ID`, OpenAlex id → `api.openalex.org/works/<id>`. Each work is tagged `citation_verified` plus a status of `verified` / `bot_blocked` / `unresolved` / `no_identifier` / `suspicious`. A **malformed DOI is flagged `suspicious`** — a likely hallucinated identifier is caught *before* it can appear in the report. Scope it with `--verify {all|top|none}`; the default `all` verifies every work.
+1. **Every citation is resolved against its live source (P0, default ON).** Before a work reaches your report, its identifier is checked against the real bibliographic API: DOI → `doi.org` (HTTP 2xx), PMID → Europe PMC `EXT_ID`, OpenAlex id → `api.openalex.org/works/<id>`. Each work is tagged `citation_verified` plus a status of `verified` / `bot_blocked` / `unresolved` / `no_identifier` / `suspicious`. A **malformed DOI is flagged `suspicious`** — a likely hallucinated identifier is caught *before* it can appear in the report. Scope it with `--verify {all|top|background}`; the default `all` verifies every work.
    - **`bot_blocked`**: some publishers (NEJM, JAMA, Wiley, MDPI…) return **403** to programmatic access even though the DOI is real. The skill reports this distinctly — it is *not* a broken link, and the work stays `verified=True`.
 2. **Title / author consistency depth (v0.6.11).** Once an identifier resolves to a live resource, the skill fetches that resource's canonical metadata (title + first-author surname) from the authoritative, bot-friendly API — **Crossref** for DOIs (bot-friendly even when the publisher blocks `doi.org`), **Europe PMC** for PMIDs, **OpenAlex** for OpenAlex ids — and compares it to the work you hold. A resolved-but-**different** paper is flagged **`mismatch`** (not `verified`); a `bot_blocked` DOI whose Crossref metadata matches is **upgraded to `verified`**. A hallucinated-but-real DOI is thus caught *even when it resolves*. Metadata-fetch failure degrades gracefully to "verified, consistency unchecked" — it never invents a mismatch. Opt out with `--no-consistency`.
 3. **Full provenance is recorded, not summarized away.** Every merged work keeps its `sources` list (which API produced it), and `evidence_log.json` stores an immutable-style audit trail: query → source → hit count → retrieved_at → verification rate. You can always trace a claim back to the exact API call that produced it.
 4. **The report never pads gaps with fluent prose.** Every factual line in the report carries a source label or an explicit `⚠️ needs official verification` marker. The skill does **not** generate plausible-looking evidence to fill holes — if a source failed or a work is unverified, that is shown, not hidden.
 
-Operational safeguards reinforce this: **Safe Preview** keeps normalization / reporting on your machine (no remote code execution), and **source-aware skip** avoids redundant re-checks while still trusting each identifier *by provenance* (a paper OpenAlex returned already carries a real OpenAlex id, so it isn't re-queried there). All of this follows the ct-base anti-hallucination spec (§17.1).
+Operational safeguards reinforce this: **Safe Preview** keeps normalization / reporting on your machine (no remote code execution), and **source-aware skip** avoids redundant re-checks while still trusting each identifier *by provenance* (a paper OpenAlex returned already carries a real OpenAlex id, so it isn't re-queried there). All of this follows the anti-hallucination spec (§17.1).
 
 **Net:** the references this skill gives you are real, resolvable, and traceable — safe to put in a slide, a protocol, or a CSR appendix, provided you validate against the official source before any regulatory submission (see the [First-Time FAQ](#first-time-faq)).
 
@@ -227,7 +227,7 @@ The skill covers published-evidence retrieval across the clinical-trial lifecycl
   - **Semantic Scholar (no key):** Prone to HTTP 429; the skill skips it entirely when no key is configured.
 - **Tip:** Start with the default sources (OpenAlex + Europe PMC) and a modest `max_results`; only enable extra sources if you need broader coverage.
 
-**Q: Why can't the fetch be faster?** A: Because the skill only uses the **official public access methods each site provides** (their public APIs / endpoints) and **never violates any site's terms or policies** — it fetches politely, source by source, page by page, so it cannot deliver the "crawl a huge dataset in minutes" effect of an aggressive scraper. Concretely: (1) **Different sources already run in parallel** (one worker per source) — adding more cross-source parallelism won't help. (2) **Each source must page serially** — the public bibliographic APIs (OpenAlex keyless pool, Europe PMC polite pool) throttle or ban clients that fire many parallel requests; serial paging is what keeps you under the ban radar. (3) If a run feels slow, the usual bottleneck is **full citation verification** (default ON; one or more HTTP lookups per work) — switch to `--verify top 15` or `--verify none` to cut ~1–4 minutes. (4) Keep `max_results` moderate — time and API usage scale linearly with it. Bulk PDF fetching is the other multi-second-per-work operation (each request follows a redirect chain).
+**Q: Why can't the fetch be faster?** A: Because the skill only uses the **official public access methods each site provides** (their public APIs / endpoints) and **never violates any site's terms or policies** — it fetches politely, source by source, page by page, so it cannot deliver the "crawl a huge dataset in minutes" effect of an aggressive scraper. Concretely: (1) **Different sources already run in parallel** (one worker per source) — adding more cross-source parallelism won't help. (2) **Each source must page serially** — the public bibliographic APIs (OpenAlex keyless pool, Europe PMC polite pool) throttle or ban clients that fire many parallel requests; serial paging is what keeps you under the ban radar. (3) If a run feels slow, the usual bottleneck is **full citation verification** (default ON; one or more HTTP lookups per work) — switch to `--verify top` (default top-15) to cut ~1–4 minutes. (4) Keep `max_results` moderate — time and API usage scale linearly with it. Bulk PDF fetching is the other multi-second-per-work operation (each request follows a redirect chain).
 
 **Q: Can I search in Chinese?** A: Partially — the skill auto-translates Chinese topics to English through **bundled offline dictionaries** (~900 entries: medical terms + drug INN names + brand names like 泰瑞沙→Tagrisso/osimertinib + MeSH synonyms; no network call) before querying the APIs, and the report banner shows the original and the translation as `中文 → English`. Equivalent names are combined with boolean OR to widen recall (e.g. `osimertinib OR Tagrisso`, `lung cancer OR pulmonary neoplasm`). Terms the dictionaries do not cover pass through as-is (recall may suffer) and a notice lists the unmapped ones — you can extend the dictionaries yourself by adding entries to `references/user_terms.json` (same `{中文: "English"}` format, values may be a list of synonyms; the file is git-ignored so your additions are never published). For best recall, use English terms — especially for rare conditions or novel compounds.
 
@@ -242,7 +242,7 @@ The skill covers published-evidence retrieval across the clinical-trial lifecycl
 Experience details: before a batch starts it states the pace (roughly **10–20 s per paper**; a 40-work batch runs ~10–15 min); afterwards PDFs land in a `pdfs*/` folder (DOI-named), it reports elapsed time ("N/M succeeded, took X s"), and **the Excel report gets a 「PDF 本地路径」column** (absolute path on success, "failed" otherwise). Keyless auto channels give a real-world success rate of roughly **70–90%** (OA coverage and publisher blocking vary). How to ask: say "download ALL OA PDFs", "download the newest 40 PDFs and log the time", or give a DOI/PMID list.
 
 **Q: What if I found an error in the result — how do I report it?**
-A: This skill follows the ct-base §20.3 bug-report workflow. If you suspect the result is wrong (or the engine errored), just say **"report a bug" / "上报问题" / "提交错误报告"**. The skill also **proactively asks** whether to report when it detects a likely defect (e.g. the engine errors or retries still fail) — at most **once per session**, and you can always decline. Either way, the assistant will:
+A: This skill follows the bug-report workflow. If you suspect the result is wrong (or the engine errored), just say **"report a bug" / "上报问题" / "提交错误报告"**. The skill also **proactively asks** whether to report when it detects a likely defect (e.g. the engine errors or retries still fail) — at most **once per session**, and you can always decline. Either way, the assistant will:
 1. **Propose a sanitized report** (11-field whitelist: skill / skill_version / test / error_type / error_code / engine_status / description / locale / query_origin / session_hash / attempts — **no raw input values or personal data**, except the `description` field where you decide what to disclose, e.g. the algorithm/function used and the error message);
 2. **Show the full report text for your review** — you can add a problem description or correct anything before confirming;
 3. **Send after your explicit confirmation** — to the unified endpoint `https://ct-bugreport.coze.site/run` (if this session called coze) or saved locally + emailed to the author (if purely local, data never leaves your machine);
@@ -261,6 +261,7 @@ You stay in full control: the report is shown to you **before** anything is sent
 
 ### Outbound & Privacy
 - **Bibliographic search (public APIs only):** your topic + filters go to **OpenAlex** / **Europe PMC** / **Semantic Scholar** (only the sources you enable), plus **doi.org** and **Crossref** during citation verification. No confidential / sponsor data is ever sent.
+- **Metadata sent with every outbound request:** each request carries ① your business parameters (topic / filters) plus ② `query_origin` (a SHA-256 hash of your machine hostname — used for rate-limit attribution and billing; **this is a one-way hash, NOT your plaintext hostname**) and `locale` (your OS language, used to localize UI prompts). These fields are computed locally on your machine and sent as opaque identifiers — no PII, no hostname, no IP leaves your device.
 - **Bug reports (opt-in, user-confirmed):** `adapters/bug_report.py` sends an **11-key sanitized envelope** (skill / version / error_type / description / … — never raw data or subject records) to `https://ct-bugreport.coze.site/run` **only after you explicitly confirm** a two-stage prompt; without cloud access it falls back to a local file.
 - **Keys stay on your machine:** keys are read from your local `ct-literature/.env` and never ship with the package (only `.env.example` ships). Apply for your own OpenAlex key at <https://openalex.org/settings/api> and configure it yourself via the [First-Time FAQ](#first-time-faq) (`.env` / env var / `--openalex-key`); never commit `.env` to a repo. (Optional, not recommended: you may paste a key and ask the assistant to write it locally — stored only on your machine, never echoed or logged. Self-configuring is preferred.)
 
@@ -309,14 +310,14 @@ ct-literature/
 │   ├── normalize.py         # multi-source merge + dedupe
 │   ├── score_relevance.py   # relevance scoring
 │   ├── screen_prisma.py     # deterministic PRISMA title/abstract screen
-│   ├── export_xlsx.py       # Excel deliverable (ct-base excel_style)
+│   ├── export_xlsx.py       # Excel deliverable (excel_style)
 │   ├── export_html.py       # self-contained HTML report
 │   ├── format_citations.py  # APA/Nature/Vancouver/IEEE/GB7714 + BibTeX/RIS
 │   ├── evidence_log.py      # provenance audit trail (evidence_log.json/.md)
 │   ├── obsidian_exporter.py # Obsidian notes + MOC
 │   ├── zotero_exporter.py   # Zotero RIS/CSV
 │   ├── i18n.py              # bilingual single source of truth
-│   └── excel_style.py, …             # shared style (ct-base vendor)
+│   └── excel_style.py, …             # shared style
 ├── references/              # SOP, key setup, search menu, multi-db method
 └── assets/icon.svg          # A-tier logo
 ```
@@ -338,7 +339,7 @@ python scripts/ct_literature.py --topic "osimertinib" --safety --run --out-dir .
 # P0 · citation verification (default ON, mode=background) + evidence log are automatic under --run.
 # Scope it with --verify {all|top|background}; source-aware skip avoids redundant same-source
 # re-resolution (a paper from OpenAlex/Europe PMC is trusted by provenance).
-# Verification is an anti-hallucination gate (ct-base §17.1 P0): it cannot be fully disabled —
+# Verification is an anti-hallucination gate (§17.1 P0): it cannot be fully disabled —
 # "none" is not a valid mode (v0.9.6 removed the CLI bypass).
 python scripts/ct_literature.py --topic "osimertinib" --run --out-dir ./out
 # Best speed/coverage balance for large result sets: verify only the top-ranked works (default top 15; --verify-top-n adjusts N — verification is never disabled)
@@ -384,7 +385,7 @@ python scripts/ct_literature.py --topic "osimertinib" \
 
 ---
 
-**Version**: v0.9.7 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v1.0.1 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, feel free to contact the author directly at medstatstar@gmail.com (Wintone Zhang / 张文彤).
 
@@ -392,9 +393,11 @@ For feature requests, bug reports, or other feedback, feel free to contact the a
 
 ## Confidentiality Notice
 
-> The CT series consists of 20+ specialized domain skills, organized into **two tiers — A, B** — by "whether the input contains confidential information" (network / egress / publish are independent orthogonal attributes; see ct-base §11), providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
+> The CT series consists of 20+ specialized domain skills, organized into **two tiers — A, B** — by "whether the input contains confidential information" (network / egress / publish are independent orthogonal attributes), providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
 >
 > - **Tier A (non-confidential input)**: run fully locally using only ordinary data; Tier A may need external public retrieval but involves no confidential information. These skills are published openly on GitHub.
 > - **Tier B (confidential input)**: accept strictly confidential clinical-trial data / protocols / CRFs from pharma sponsors (e.g., ct-analysis, ct-sdtm, ct-protocol, ct-eligibility); Tier B is processed locally and never leaves the boundary (egress=none), or additionally requires policy approval (egress=approval-req, e.g. ct-eligibility). Tier B packages contain zero confidential data but are NOT publicly published (stays fully local) — confidential input never ships with the package or leaves the machine. For custom / on-prem deployment, contact the author.
 >
 > 📧 Contact: medstatstar@gmail.com (Wintone Zhang / 张文彤)
+
+> 🌐 Other languages: [中文 README](README_zh-CN.md)

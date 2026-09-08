@@ -305,7 +305,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     # work_key — verify once, attach to every copy by key (see attach_verifications).
     _seen_keys = set()
     # Source-aware streaming verification runs in `all` and `background` modes.
-    # In `top` mode we verify after ranking (only the top-N); in `none` we skip entirely.
+    # In `top` mode we verify after ranking (only the top-N).
     _should_stream = (verify_mode in ("all", "background") and jobs)
     if _should_stream:
         _out("[verify] mode=%s (streaming; source-aware skip on same-source re-resolution)"

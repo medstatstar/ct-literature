@@ -1,7 +1,7 @@
 # Capability Units
 
 > Schema: Input / Output / Dependencies / AI autonomy / Composition interface
-> Designed per ct-base `BASE.md` §6. AI autonomy: ⬛ fully automatic / 🟨 semi-automatic (confirmation required) / ⬜ assistive.
+> Designed per the library convention §6. AI autonomy: ⬛ fully automatic / 🟨 semi-automatic (confirmation required) / ⬜ assistive.
 
 ---
 

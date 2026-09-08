@@ -1,9 +1,9 @@
 # 检索细节确认菜单框架 / Search Confirmation Menu (ct-literature 定制版)
 
 > **框架归属 / Framework**：本文件 = ct- 家族 **「检索型交互框架（Type-Search）」** 规范在 **ct-literature** 的落地（确认后才执行）。
-> 家族共享规范见 `ct-base/references/search_menu.md`（本文件以其为骨架，按 ct-literature 参数清单定制）；
-> 与之并列的 **「计算型交互框架（Type-Compute）」** 见 `ct-base/references/compute_menu.md`（meta-analysis / ct-samplesize）。
-> 选哪套看 `ct-base/references/interaction_frameworks.md`；跨轮连续性统一见 `ct-base/references/continuity.md`。
+> 本文件基于 ct- 家族共享的「检索型交互框架（Type-Search）」规范，按 ct-literature 参数清单定制；
+> 与之并列的 **「计算型交互框架（Type-Compute）」** 见 `references/compute_menu.md`（meta-analysis / ct-samplesize）。
+> 选哪套看 `references/interaction_frameworks.md`；跨轮连续性统一见 `references/continuity.md`。
 
 > 本文件定义自然语言对话中，AI Agent 引导用户确认检索参数的通用交互流程。
 > **covers every confirmation node from "user request" to "execute search"**——含参数确认、关键字体系确认门、预览确认与跨轮连续性。
@@ -238,7 +238,7 @@
 >
 > **② 要不要做引用验证？**
 > - (a) 不做 — 快（默认）
-> - (b) 做 `--verify top` — 防幻觉（ct-base §17.1 P0），耗时 +1–3 分钟
+> - (b) 做 `--verify top` — 防幻觉（§17.1 P0），耗时 +1–3 分钟
 >
 > **③ 还拿不准？** → 说「详细解释这些选择之间的差异」，我先讲清临床与统计含义再让你决定
 >
@@ -276,9 +276,9 @@
 ## 12. 关键字体系确认门 / Keyword-System Confirmation Gate
 
 > 检索型技能的**核心确认门**：凡用户提供了可解析的检索词，构建关键字 Manifest（自动扩展 + 中英互译）后**强制弹确认门**，让用户过目技能替 TA 扩展的词。
-> - 引擎：`ct-base/scripts/kw_localize.py`（`expand_keyword` / `render_kw_system_menu` / `render_kw_system_menu_multi`）
-> - 词库：`ct-base/scripts/kw_lexicon.json` + `ct-base/references/term_map.json`；双语框架标签：`ct-base/scripts/i18n.py` 的 `kw_gate.*` 键
-> - 完整 Manifest schema 与扩展维度见 `ct-base/references/keyword_expand.md`
+> - 引擎：`scripts/kw_localize.py`（`expand_keyword` / `render_kw_system_menu` / `render_kw_system_menu_multi`）
+> - 词库：`scripts/kw_lexicon.json` + `references/term_map.json`；双语框架标签：`scripts/i18n.py` 的 `kw_gate.*` 键
+> - 完整 Manifest schema 与扩展维度见 `references/keyword_expand.md`
 
 ### 12.1 插入位置
 
@@ -330,14 +330,14 @@
 ## 13. 跨轮连续性（回显当前检索设定块）/ Cross-turn Continuity
 
 > 多轮追问时，前轮已确认的参数（topic / year / review_type / sources / safety …）必须无损继承，不能只凭 LLM 记忆。
-> 家族标准见 `ct-base/references/continuity.md` 模式 A（Type-Search 自动继承）。
+> 家族标准见 `references/continuity.md` 模式 A（Type-Search 自动继承）。
 
 ### 13.1 规则
 
 1. **每次执行后回显「当前检索设定」块**：在 §7 输出确认里，固定追加一个紧凑设定块，例如
    `## 当前检索设定：topic=osimertinib | type=systematic-review | year=2020-now | safety=off | sources=openalex+europepmc | max=30 | verify=none`
 2. **追问时只改变化字段**：用户说"只看近 5 年"或"换成 semaglutide"时，LLM **必须读取对话中最近一个设定块**，只覆盖变化字段（year / topic），其余原样继承，再进 §12 关键字门或执行。
-3. **确定性兜底（可选）**：担心漏带时，用 `ct-base/scripts/merge_spec.py` 合并（上一轮 spec JSON + 本轮 partial，经 stdin 传入），输出完整 merged spec；状态仅经对话线程传入，不落盘、不跨轮缓存。
+3. **确定性兜底（可选）**：担心漏带时，用 `scripts/merge_spec.py` 合并（上一轮 spec JSON + 本轮 partial，经 stdin 传入），输出完整 merged spec；状态仅经对话线程传入，不落盘、不跨轮缓存。
 
 ### 13.2 与既有机制的关系
 
