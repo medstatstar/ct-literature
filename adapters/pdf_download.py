@@ -584,10 +584,19 @@ class PdfDownloader:
         out_dir: PDF 保存目录
         email: Unpaywall email（OA 解析用）
         progress: 进度回调 fn(msg)
+        min_delay: 预印本逐篇下载间隔秒数（防 Cloudflare 限流，默认 3.0）
+        merged_json: 本次运行的 .merged.json 路径（回写 Excel 时读 meta；None = 不读）
+        xlsx_out: 目标 Excel 路径；**给定后 run() 结束会自动把 PDF 本地路径写回
+            「PDF 本地路径」列**（用户 2026-09-08 加固：此前该步骤仅主流程内联实现，
+            独立直驱脚本易漏，导致「下了却没写进 Excel」）。None = 不回写。
+        lang: 回写 Excel 的语言（"auto"/"zh"/"en"，默认 "auto"，与 export_workbook 一致）
+        safety: 回写是否渲染 Safety-Related 表（None = 回退到 merged meta.safety）
     """
 
     def __init__(self, out_dir: str = "pdfs", email: str = DEFAULT_EMAIL,
-                 progress=None, min_delay: float = 3.0):
+                 progress=None, min_delay: float = 3.0,
+                 merged_json: str = None, xlsx_out: str = None,
+                 lang: str = "auto", safety=None):
         # normpath 归一路径分隔符（out_dir 常以正斜杠传入，join 会混用 \ /，
         # 导致落盘路径与 Excel 显示出现 C:/…\file 混用）
         self.out_dir = os.path.normpath(out_dir)
@@ -603,6 +612,13 @@ class PdfDownloader:
         # 本地预筛（2026-09-07）：Unpaywall 查询结果缓存（按 DOI），整轮复用避免重复查询
         self._upw_cache: Dict[str, Any] = {}
         self._upw_email = _UPW_EMAIL
+        # Excel 自动回写配置（用户 2026-09-08）：构造时给定 xlsx_out，run() 正常结束
+        # 即自动把 PDF 本地路径写回「PDF 本地路径」列，避免独立直驱 PdfDownloader
+        # 的下载脚本漏调 update_xlsx_pdf_paths.py 而出现「下了却没写进 Excel」。
+        self.merged_json = merged_json   # .merged.json 路径（读 meta；None = 不读）
+        self.xlsx_out = xlsx_out        # 目标 Excel 路径（None = 不回写）
+        self.lang = lang
+        self.safety = safety            # None = 回退到 merged meta.safety
 
     def _log(self, msg: str):
         self.progress(msg)
@@ -886,6 +902,47 @@ class PdfDownloader:
         # ③ 负向：非 OA、无预印本、无 OA 链接、无 PMC 手稿 → 跳过 coze
         return ("skip", None)
 
+    # ── Excel 自动回写（下沉职责，run() 正常结束后调用）──
+    def _write_back_xlsx(self, works: List[Dict[str, Any]]) -> str:
+        """下载完成后把 PDF 本地路径写回 Excel「PDF 本地路径」列。
+
+        此前该步骤只在主流程 ct_literature.py 内联实现，独立直驱 PdfDownloader
+        的脚本（如 dl_top10.py / dl_latest40.py）一旦漏调 update_xlsx_pdf_paths.py
+        就会出现「PDF 已下载却没写进 lit_report.xlsx」的错位（用户 2026-09-08 反馈）。
+        现把回写下沉到下载器自身：构造时给了 xlsx_out，run() 结束即自动重渲。
+
+        返回被更新的 xlsx 绝对路径；未配置 xlsx_out 或失败时返回 ""。
+        """
+        if not self.xlsx_out:
+            return ""  # 未配置目标 Excel → 不做回写（独立测试 / 仅下载场景）
+        try:
+            import sys as _sys
+            # pdf_download.py 在 adapters/，export_xlsx.py 在 scripts/：确保可 import
+            _scripts = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "scripts")
+            if _scripts not in _sys.path:
+                _sys.path.insert(0, _scripts)
+            from export_xlsx import export_workbook
+            meta = {}
+            if self.merged_json and os.path.isfile(self.merged_json):
+                try:
+                    with open(self.merged_json, encoding="utf-8") as _f:
+                        meta = (json.load(_f) or {}).get("meta") or {}
+                except Exception as _me:
+                    self._log(f"[xlsx] read merged meta failed (ignored): {_me}")
+            # 落盘路径可能相对 self.out_dir → 统一绝对路径再写入（与主流程一致）
+            for _w in works:
+                if _w.get("local_pdf_path"):
+                    _w["local_pdf_path"] = os.path.abspath(_w["local_pdf_path"])
+            _safety = self.safety if self.safety is not None else bool(meta.get("safety"))
+            export_workbook({"count": len(works), "works": works, "meta": meta},
+                            self.xlsx_out, lang=self.lang, safety=_safety)
+            self._log(f"[OK] xlsx 已更新：PDF 本地路径已写入「PDF 本地路径」列 -> {self.xlsx_out}")
+            return os.path.abspath(self.xlsx_out)
+        except Exception as _xe:
+            self._log(f"[WARN] xlsx 回写 PDF 路径失败（不影响已下载的 PDF）: {_xe}")
+            return ""
+
     def run(self, works: List[Dict[str, Any]], skip_coze: bool = False) -> Dict[str, Any]:
         """Batch PDF download (four-bucket routing: local direct / local preprint / coze / skip).
 
@@ -1150,6 +1207,14 @@ class PdfDownloader:
         self._log(f"[PDF] batch finished: ok {stats['ok']}/{stats['total']}, "
                   f"elapsed {stats['elapsed_s']}s ({stats['elapsed_min']} min), "
                   f"{stats['started_at']} -> {stats['finished_at']}")
+        # 自动回写 Excel：把 PDF 本地路径写回「PDF 本地路径」列。下沉到下载器自身，
+        # 避免独立下载路径（直驱 PdfDownloader）漏调 update_xlsx_pdf_paths.py。
+        try:
+            _upd = self._write_back_xlsx(works)
+            if _upd:
+                stats["xlsx_updated"] = _upd
+        except Exception:
+            pass
         return stats
 
 
@@ -1161,5 +1226,8 @@ if __name__ == "__main__":
         dl = PdfDownloader(out_dir="pdfs")
         stats = dl.run(works)
         print(json.dumps(stats, ensure_ascii=False, indent=2))
-        for w in works:
-            print(f"  {w['doi']}: {w.get('local_pdf_path') or w.get('pdf_download_note')}")
+        # 注意：不要逐篇打印 PDF 绝对路径到 stdout —— 若被结果面板按路径解析会
+        # 逐个打开 PDF 卡死 UI（用户 2026-09-08）。路径已写回 Excel「PDF 本地路径」列，
+        # 用户到 out_dir/pdfs/ 自行打开即可。
+        _ok = sum(1 for w in works if w.get("local_pdf_path"))
+        print(f"[summary] ok={_ok}/{len(works)} (PDF paths written to Excel, not printed here)")

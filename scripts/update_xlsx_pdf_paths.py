@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
-"""把磁盘上已下载的 PDF 本地路径写回 Excel 报告（standalone，供直驱 PdfDownloader 的
-批量下载场景使用——主流程 --download-pdf 已内置自动回写，本工具服务独立下载脚本）。
+"""把磁盘上已下载的 PDF 本地路径写回 Excel 报告（**事后补救 / 重扫** 用途）。
+
+⚠️ 现状（2026-09-08 加固）：`PdfDownloader.run()` 在构造时传入 `xlsx_out` 已会
+**自动回写** Excel「PDF 本地路径」列。主流程 `--download-pdf` 与任何独立直驱脚本
+（只要构造 PdfDownloader 时传了 `xlsx_out`）都不再需要手动调本工具。本脚本现仅用于
+两类补救场景：
+  ① 下载完成后手动把 PDF 拷入 pdf 目录、需按文件名（DOI 转义 / → _）补写路径；
+  ② 某次运行因异常未回写成功时，用同一 .merged.json + pdf 目录重扫重渲。
 
 用途：检索产出 .merged.json 后，用 PdfDownloader（或任何下载器）把 PDF 落到某目录；
      运行本脚本扫描该目录（文件名 = DOI 转义，/ → _，.pdf），按 DOI 匹配 works，

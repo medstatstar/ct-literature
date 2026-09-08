@@ -720,10 +720,19 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         try:
             from adapters.pdf_download import PdfDownloader
             pdf_dir = os.path.join(out_dir, "pdfs")
-            dl = PdfDownloader(out_dir=pdf_dir, progress=lambda m: _out(m, "pdf_download"))
+            # Excel 回写职责交给 PdfDownloader 自身：构造时传 xlsx_out，run() 结束即
+            # 自动把 PDF 本地路径写回「PDF 本地路径」列。这样独立直驱 PdfDownloader
+            # 的脚本（dl_top10.py / dl_latest40.py）只要同样传入 xlsx_out，就不会再
+            # 漏写（用户 2026-09-08 加固：此前该步骤只在主流程内联，独立路径易漏）。
+            _xlsx_out = os.path.join(out_dir, "lit_report.xlsx") if make_xlsx else None
+            dl = PdfDownloader(out_dir=pdf_dir, merged_json=merged_json,
+                               xlsx_out=_xlsx_out, lang=lang, safety=safety,
+                               progress=lambda m: _out(m, "pdf_download"))
             _out(f"[PDF] 开始批量下载 {len(works)} 篇文献的 PDF：每篇约需 10–20 秒"
                  f"（视网络与限流而定），请耐心等待完成，无需任何操作。")
             pdf_stats = dl.run(works)
+            # run() 已自动回写 Excel（若构造时给了 xlsx_out），结果经 stats["xlsx_updated"] 透传
+            _xlsx_updated = pdf_stats.get("xlsx_updated") or ""
             if pdf_stats.get("rejected"):
                 # 总量超上限被拒：提示缩小范围（用户 2026-09-06：>50 直接拒绝避免超时）
                 _out(f"[PDF] 拒绝下载 (elapsed {pdf_stats.get('elapsed_s', 0)}s): "
@@ -732,44 +741,31 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             else:
                 # 耗时统计反馈（用户 2026-09-07：每次 PDF 下载都要报用时）
                 _ok, _tot = pdf_stats.get("ok", 0), pdf_stats.get("total", 0)
-                # 下载完成后把 PDF 本地路径回写进 Excel（用户 2026-09-07）：
-                # run() 已把 local_pdf_path / pdf_download_note 写到内存 works 上，
-                # 用同一渲染函数重渲 lit_report.xlsx ——「PDF 本地路径」列（导出器
-                # _WORKS_COLS 早已预留）即真实呈现；不用 openpyxl 改存以免丢图表。
-                _xlsx_updated = ""
-                if make_xlsx:
-                    try:
-                        with open(merged_json, encoding="utf-8") as _f:
-                            _meta = (json.load(_f) or {}).get("meta") or {}
-                        # PdfDownloader 落盘路径可能相对 out_dir → 统一绝对路径再写入
-                        for _w in works:
-                            if _w.get("local_pdf_path"):
-                                _w["local_pdf_path"] = os.path.abspath(_w["local_pdf_path"])
-                        export_xlsx.export_workbook(
-                            {"count": len(works), "works": works, "meta": _meta},
-                            os.path.join(out_dir, "lit_report.xlsx"),
-                            lang=lang, safety=safety)
-                        _xlsx_updated = os.path.join(out_dir, "lit_report.xlsx")
-                        _out("[OK] xlsx 已更新：PDF 本地路径已写入报告 -> %s"
-                             % _xlsx_updated, "xlsx_updated",
-                             path=_xlsx_updated, kind="xlsx_pdf_paths")
-                    except Exception as _xe:
-                        _out("[WARN] xlsx 回写 PDF 路径失败（不影响已下载的 PDF）: %s"
-                             % _xe, "pdf_xlsx_update_failed", error=str(_xe))
                 # 用户可读反馈：不倾倒技术性 JSON（stats 细节仅经 json 事件透传）
                 _el = pdf_stats.get("elapsed_s")
                 _base = f"[PDF] 下载完成: {_ok}/{_tot} 篇成功"
                 if _el is not None:
                     _base += f"，用时 {_el}s（{pdf_stats.get('elapsed_min', 0)} 分钟）"
+                # ⚠️ 红线（用户 2026-09-08）：结果面板只呈现标准产物（html/xlsx），
+                # 绝不逐个打开 PDF——几十个 PDF 同时打开会卡死 UI。下载反馈只透传
+                # 计数字段与「Excel 已回写」标志，**不泄漏任何 PDF 文件路径**；
+                # 仅用纯文本告知用户共同保存目录 pdf_dir，由其自行打开。
                 if _xlsx_updated:
-                    _out(f"{_base}。PDF 已保存至 {pdf_dir}，Excel 报告已更新「PDF 本地路径」列。",
-                         "pdf_download_done", **pdf_stats)
+                    _out(f"{_base}。PDF 已保存至 {pdf_dir}，Excel 报告「PDF 本地路径」列已更新。"
+                         f"结果面板不逐个打开 PDF，请到该目录查看。",
+                         "pdf_download_done",
+                         ok=_ok, total=_tot, elapsed_s=pdf_stats.get("elapsed_s"),
+                         xlsx_updated=_xlsx_updated)
                 elif _ok > 0:
-                    _out(f"{_base}。PDF 已保存至 {pdf_dir}。",
-                         "pdf_download_done", **pdf_stats)
+                    _out(f"{_base}。PDF 已保存至 {pdf_dir}。"
+                         f"结果面板不逐个打开 PDF，请到该目录查看。",
+                         "pdf_download_done",
+                         ok=_ok, total=_tot, elapsed_s=pdf_stats.get("elapsed_s"))
                 else:
-                    _out(f"{_base}。未下载到可用 PDF（多为付费墙 / 无 OA 直链）。",
-                         "pdf_download_done", **pdf_stats)
+                    _out(f"{_base}。未下载到可用 PDF（多为付费墙 / 无 OA 直链）。"
+                         f"PDF 目录：{pdf_dir}。",
+                         "pdf_download_done",
+                         ok=_ok, total=_tot, elapsed_s=pdf_stats.get("elapsed_s"))
         except Exception as e:
             _out(f"[PDF] 批量下载失败: {type(e).__name__}: {e}", "pdf_download_failed", error=str(e))
 

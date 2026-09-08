@@ -3,6 +3,26 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.0.2 (2026-09-08) · PDF 下载链健壮性加固（回写职责下沉 + 结果面板护栏）
+
+- **PDF 下载完成自动回写 Excel「PDF 本地路径」列（用户 2026-09-08，根因修复）**：
+  ① 根因：`PdfDownloader.run()` 仅把 `local_pdf_path`/`pdf_download_note` 写回内存 works，Excel「PDF 本地路径」列的重渲原只在主流程 `ct_literature.py` 内联实现；独立脚本直驱 `PdfDownloader` 时漏调回写工具，已下载 PDF 不进 `lit_report.xlsx`。
+  ② 加固：回写职责**下沉到 `PdfDownloader` 自身**——构造时传入 `merged_json`/`xlsx_out`/`lang`/`safety`，`run()` 正常结束自动重渲 Excel 并把更新路径写入 `stats["xlsx_updated"]`；任何调用方都不会漏。`rejected` 提前返回不回写（保持主流程原行为）。
+  ③ `scripts/ct_literature.py` 主流程改为构造时传参、删除内联回写块、读 `stats["xlsx_updated"]` 反馈；`scripts/update_xlsx_pdf_paths.py` 降级为「事后补救 / 重扫」用途（手动拷入 PDF 后补写、或异常未回写时重渲）。
+
+- **PDF 下载反馈不再泄漏路径、结果面板不逐个打开 PDF（用户 2026-09-08）**：
+  ① `scripts/ct_literature.py` 的 `pdf_download_done` 反馈由 `**pdf_stats` 全量透传改为
+  显式白名单字段（`ok / total / elapsed_s / xlsx_updated`），**杜绝任何 PDF 文件路径流向
+  结果面板**；文案明确「结果面板不逐个打开 PDF，请到 `<pdf_dir>` 目录查看」。
+  ② `adapters/pdf_download.py` `__main__` 测试入口：逐篇打印 PDF 绝对路径改为只输出
+  `ok/total` 计数，避免路径经 stdout 被解析打开。
+  ③ `SKILL.md` 新增红线：**`--download-pdf` 及任何直驱 `PdfDownloader` 的脚本，结果面板
+  只呈现 `lit_report.html` / `lit_report.xlsx`，绝不逐个打开 / 列出 PDF**（数十个会卡死 UI），
+  仅用纯文本告知共同保存目录 `out_dir/pdfs/`。
+  ④ 直驱示例 `dl_latest40.py` 尾部加同等护栏注释。
+  背景：下载几十篇 PDF 时结果面板逐个打开会卡死 UI；此前仅 Excel 回写职责已下沉（v1.0.0
+  同日加固），本次补全「不暴露 / 不打开 PDF 路径」一侧。
+
 ## v1.0.0 (2026-09-07) · 首个正式版：PDF 下载链 + §16 预发布规范整改（0.9.8 规划内容以 1.0.0 发布）
 
 > **版本跃迁说明**：本版内容为原规划 v0.9.8；因发布前合规整改完成、功能面达正式版标准，作者决定以 **1.0.0 正式版号首发**（v0.9.8 未在任何平台发布过）。
@@ -27,6 +47,8 @@ ct- library convention (A-tier public-intel skill — non-confidential input per
 - **README 结构调整 + PDF 合规口径强化（2026-09-07）**：① 中文版结构调整（引言顺序对调、数据源/反幻觉两大节移至示例区后、示例 8→7 删 Excel 交付示例）同步镜像英文，目录/示例数/交叉引用中英自洽修复；② PDF 下载 FAQ 合规边界重写（用户口径）：**只协助 OA 下载、非 OA 不提供支持（技术上不做任何违法操作，不破解不绕过付费墙）**；**仅供个人使用、禁止商业用途**；OA 直下失败尽力找预印本/作者手稿替代；**善用免费资源勿过量（防封 IP）**，内置跨域并发限速 + 同域节流，**单批超 50 篇直接拒绝**。与 `PDF_DOWNLOAD_NOTICE` 运行时横幅口径一致。**追加（2026-09-07）**：防封 IP 条目细化为「请求节奏自控」——为免法律纠纷，技能**严格控制相邻两次下载请求间隔 ≥5 秒**（与 `COZE_BATCH_INTERVAL=5` 实现呼应）、不触及服务器压力线，并提醒用户控制批量频次、勿过量使用免费资源；中英双份同步。
 
 - **ClawHub 安全审计整改与留痕（§16.0，2026-09-07 对比当前发行版）**：① **[HIGH] `--verify-top-n`（design-so 留痕 + 措辞整改）**——该参数语义是 `--verify top` 模式验证前 N 篇的**数量**，非关闭验证（验证永不关闭，v0.9.6 已移除 bypass）；整改：argparse help 显式注明 "does NOT disable verification"、README 双份示例不再内联该参数（默认 top-15 表述），workbench 引用随整目录排除不发布；保留参数为设计所需，审计判定留痕；② **[MEDIUM] guidelines 语料纯度（措辞整改）**——SKILL.md guideline 段新增 Corpus boundary 声明：语料含 reviews/consensus/adherence 等背景条目，非权威指南，须回链解析源；`retrieved:false` 为诚实占位非虚构引用；③ **[MEDIUM] `.env` 引导写 key（design-so 留痕）**——README 已含"聊天消息可能被平台留存"警示与自行配置三路径，key 仅本地、符合全库 key 治理；④ **UNVERIFIED 6 项人工核对**：Tp4/双 Description-Behavior（bug-report 出站）——README 已披露 11-key 脱敏信封 + 端点 + opt-in；Context-Inappropriate 可逆混淆静态凭据——符合 ct-base §5 公用凭据 XOR+base64 规范；guidelines pointer 占位——SKILL.md 已声明 pointer-only；Ssd3（changelog key 指引）——同 ③ 留痕。
+
+- **PDF 回写 Excel 下沉到下载器自身（2026-09-08 加固，避免独立下载路径漏写）**：根因——`PdfDownloader.run()` 原本只把 `local_pdf_path` / `pdf_download_note` 写回内存 `works`，Excel「PDF 本地路径」列的重渲只在主流程 `ct_literature.py` 内联实现；独立直驱 `PdfDownloader`（如 dl_top10.py / dl_latest40.py）一旦漏调 `update_xlsx_pdf_paths.py`，就会出现「PDF 已下载却没写进 lit_report.xlsx」的错位。修复：把回写职责下沉到下载器——`PdfDownloader.__init__` 新增 `merged_json` / `xlsx_out` / `lang` / `safety` 四参数；新增 `_write_back_xlsx(works)` 方法（读 merged meta、统一绝对路径、调 `export_xlsx.export_workbook` 重渲、失败仅告警不中断），`run()` 正常结束（return 前）自动调用并把更新路径记入 `stats["xlsx_updated"]`；`rejected` 提前返回分支不回写（保持主流程既有行为）。主流程改为构造时传入上述参数、删除内联回写块、改读 `stats["xlsx_updated"]` 构造反馈。效果：任何调用方（主流程或独立脚本）只要 `PdfDownloader(out_dir=…, xlsx_out=…)` 即自动回写，不再依赖外部记得调独立工具。`update_xlsx_pdf_paths.py` 降级为「事后补救 / 重扫」（手动拷入 PDF 后补写、或异常未回写时重渲）。回归：py_compile 通过；smoke test 三项全过（`_write_back_xlsx` 单元生成 xlsx / `run()` 传 xlsx_out 自动回写 / 不传 xlsx_out 静默跳过不崩溃）。
 
 
 - **PDF 下载后回写 Excel「PDF 本地路径」列（用户 2026-09-07，实测反馈）**：下载不是终点——下载结果必须落到用户手里的报告里。① 主流程 `--download-pdf` 分支在批量下载完成后，用同一渲染函数（`export_xlsx.export_workbook`，非 openpyxl 改存，避免丢图表）以带 `local_pdf_path` 的内存 works 重渲 `lit_report.xlsx`——该列（`_WORKS_COLS` 早已预留、双语表头「PDF 本地路径 / PDF Path」）自动呈现每篇落盘绝对路径，失败项显示「失败」；meta 从 `.merged.json` 读回，Safety-Related 表同步。② 新增 standalone 工具 `scripts/update_xlsx_pdf_paths.py`（服务直驱 PdfDownloader 的独立下载场景）：扫描 pdf 目录（DOI 转义命名反解）+ 可选 `--notes-json` 注入失败原因 → 重渲 xlsx，用法 `python scripts/update_xlsx_pdf_paths.py --merged .merged.json --pdf-dir pdfs [--notes-json manifest.json]`。③ human 反馈改为明确告知用户「N/M 篇成功、用时、PDF 目录、Excel 已更新列」，**不再向用户倾倒技术性 JSON**（stats 细节仍经 json 事件 `pdf_download_done` 结构化透传，NDJSON 下游不受影响）。实测端到端：36 路径写入 / 3 失败标注 / 其余 —。

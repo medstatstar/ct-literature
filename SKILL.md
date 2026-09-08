@@ -3,11 +3,11 @@ slug: ct-literature
 name: ct-literature
 displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
-version: 1.0.1
+version: 1.0.2
 invocable: true
-summary: 检索已发表学术文献（OpenAlex、Europe PMC、预印本、arXiv 等多源），合并去重形成证据基础，并支持安全性文献定性筛查与 OA 全文获取。
+summary: 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。无key亦可使用。
 license: MIT
-description: "Search public scholarly literature (OpenAlex as primary source + Europe PMC / MeSH biomedical precision [on by default] + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize and de-duplicate the results, produces a qualitative CSM safety-literature subset, and assists in downloading open-access (OA) paper PDFs. / 检索公开学术文献（OpenAlex 主源 + Europe PMC/MeSH 生物医学精准[默认开启] + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。"
+description: "Search medical-domain scholarly literature with full data-source coverage (OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize, merge, and de-duplicate the results, produce a qualitative CSM safety-literature subset, and assist in providing open-access (OA) full-text PDF downloads. Usable without a key. / 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。无key亦可使用。"
 triggers:
   - "systematic literature search"
   - "系统文献检索"
@@ -135,7 +135,8 @@ Guidelines are **version-pinned** reference standards — at analysis time we re
 - Per-source payloads: `openalex.json` / `europepmc.json` / `semantic_scholar.json` / `biorxiv.json` / `medrxiv.json` / `arxiv.json` (enabled only)
 - `lit_report.xlsx` — Excel delivery (`excel_style`; `--no-xlsx` to skip): Overview → Literature master → Safety-related, KPI cards, charts, `is_safety` amber highlighting. **The complete result — user can keep filtering / pivoting on top of it.**
 - `lit_report.html` — self-contained HTML report (inline CSS, offline; `--no-html` to skip); inline-SVG PRISMA funnel when `--prisma`. **Default deliverable to open.**
-- **On-demand citation formats** (default OFF — ask the user or use `--export-bib`): `references.bib` / `references.ris` / `references_<style>.md` (Zotero RIS / BibTeX / APA etc.). OA-PDF downloads are likewise on request: `--download-pdf` attempts **ALL** records that carry an OA URL or DOI (batched, legal OA sources only); users may instead ask for specific DOI / PMID(s) or the top-N works. **Server-side supplement chain**: when the A-path direct links all fail, the coze endpoint runs a supplement chain — Unpaywall best-OA → Europe PMC PMC-OA → PPR preprints (bioRxiv/medRxiv, author-verified) — before the (off) browser fallback; the local skill only calls, it no longer implements multi-channel download algorithms.
+- **On-demand citation formats** (default OFF — ask the user or use `--export-bib`): `references.bib` / `references.ris` / `references_<style>.md` (Zotero RIS / BibTeX / APA etc.). OA-PDF downloads are likewise on request: `--download-pdf` attempts **ALL** records that carry an OA URL or DOI (batched, legal OA sources only); users may instead ask for specific DOI / PMID(s) or the top-N works. The PDF local-path column in `lit_report.xlsx` is written back automatically by `PdfDownloader` when constructed with `xlsx_out` (the main `--download-pdf` flow and any standalone driver that passes `xlsx_out` both benefit); you no longer need to call `update_xlsx_pdf_paths.py` separately. **Server-side supplement chain**: when the A-path direct links all fail, the coze endpoint runs a supplement chain — Unpaywall best-OA → Europe PMC PMC-OA → PPR preprints (bioRxiv/medRxiv, author-verified) — before the (off) browser fallback; the local skill only calls, it no longer implements multi-channel download algorithms.
+- **⚠️ PDF 下载后结果面板规则**：`--download-pdf` 及任何直驱 `PdfDownloader` 的脚本，下载完成后结果面板**只呈现标准产物 `lit_report.html` / `lit_report.xlsx`**，绝不逐个打开 / 列出 PDF 文件（数十个 PDF 同时打开会卡死 UI）。下载反馈仅用纯文本告知用户共同保存目录 `out_dir/pdfs/`，由用户自行打开所需 PDF。
 - `obsidian/` (`--obsidian`) — per-paper notes + `Literature MOC.md`; `zotero.csv` / `zotero.ris` (`--zotero`)
 - `.merged.json` gains additive `prisma` + per-work `relevance_score` / `prisma_included` blocks
 
