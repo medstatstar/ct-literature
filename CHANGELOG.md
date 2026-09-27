@@ -3,6 +3,420 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.1.3 (2026-09-27) · SKILL.md 瘦身至 132 行：三大块外迁 references（零内容删除）
+
+- **动因**：SKILL.md 326 行，超 ct-base §16.1 / spec_lint F02 软上限 200。按用户指示「不删除内容、
+  移到其他文档」，做**逐字外迁**（原文一字不动搬出，SKILL.md 各节压成 3–6 行摘要 + 指针链接）：
+  - `references/published_app.md`（新，51 行）← 原「Published Application」全节（登记表 + 重发布协议
+    + publish-dist 改名事故记录）；
+  - `references/capabilities.md`（新，133 行）← 原「Positioning / Data Sources / Clinical guideline
+    sources / Features / Unified work schema / Output / Implementation（含 OpenAlex key）」明细表全文；
+  - `references/dialogue.md`（新，84 行）← 原「Natural-Language Dialogue」全节（Step 0 四桶 / 红线 /
+    echo block / merge_spec / 执行流）+「Bug Reporting §20.3」全节。
+- **对账**：8 组关键特征串（appId、PROSPERO reserved、doc_type_filter、当前检索设定、
+  ct-bugreport 端点、coze_resolve --pipeline、96 curated entries、load_openalex_key）在
+  SKILL.md + 3 新文件合集内全部命中；SKILL.md 内 7 个 references 指针链接零死链；
+  新文件未被 ignore 规则误挡（可随包发布）、无隐私命中。
+- **运行面影响**：无功能代码改动；agent 侧加载契约不变（指针文件按需加载）。
+- 版本未 bump（Unreleased——待下次发布随包）。
+
+## v1.1.3 (2026-09-26) · 工作台流式检索补上检索词自动翻译 + dispatch_stream mode NameError 修复
+
+用户反馈：「工作台操作的时候似乎没有对检索关键字做自动翻译」。核实：主管线 `/api/search`
+（对话检索/高级参数）经 `ct_literature.run()` 一直有 `topic_translator` 中英翻译，
+但「工具 → 实时流式检索」（`/api/lit-stream`）把用户关键词**原样**丢给 Coze——
+中文检索词打到 OpenAlex/Europe PMC 基本零命中，属翻译盲区。
+
+- **`workbench/server.py` `_lit_stream`**：调用 `dispatch_stream` 前插入
+  `topic_translator.translate_topic(keyword, online_fallback=True)`（与主管线同一实现：
+  本地词典贪心 + MeSH OR 扩展 + 联网兜底）；命中翻译时向前端推
+  `translated {zh, en, partial, untranslated}` 事件；翻译模块异常不阻断，按原文检索。
+- **`workbench/app.js`**：流式面板渲染 `⇄ 检索词已自动翻译：中文 → English`，
+  部分未译时红字标注保留原文的词；新增 i18n 键 `trAuto` / `trPartial`（zh/en）。
+- **连带修复 `adapters/fetch_coze_unified.py`**：`dispatch()` 于 2026-09-11 新增 `mode`
+  参数时漏改 `dispatch_stream()` 签名，其内部 `mode=mode` 引用未定义全局名——
+  流式检索一 `--run` 即 `NameError: name 'mode' is not defined`（e2e 实测踩中）。
+  补 `mode: str = "search"` 形参并透传。
+- **验证**：本地起 server 实测——「奥希替尼 间质性肺病」→ `(osimertinib OR Tagrisso)
+  interstitial lung disease (ILD)`，OpenAlex 真实检索返回 5 篇；纯英文 `metformin`
+  原样透传、无 translated 事件。bundle 已 `build_publish.py` 重建（3 处修改均确认落盘）。
+- **已发布（2026-09-26 11:45）**：按 ct-workbench-publish 铺开计划验收协议在新 workspace
+  覆盖发布——install_genie ①→publish_guard pre ②→deploy（appId 覆盖，shareLink 断言
+  `ct-literature.app.workbuddy.host` 通过）→genie 回读无污染 ⑤→post-gate PASS ⑥→
+  线上验证：app.js MD5 与载荷一致、`/api/status` 200、线上 `/api/lit-stream`
+  「奥希替尼 间质性肺病」实测返回 `translated` 事件 → `(osimertinib OR Tagrisso)
+  interstitial lung disease (ILD)`。跨 workspace 方案 B 对 ct-literature 二次实证。
+
+## v1.1.3 (2026-09-19) · 解码与下载并行：本地直链一到手就落盘
+
+用户反馈：「直链解码和 PDF 下载完全可以并行的，现在观察到的是本地先搜索一遍有直链的，
+然后把无法解码的再发送扣子。实际上，本地如果已经解码到直链，就直接开始下载就可以了。
+这种并行操作不仅在工作台界面上，在上下文对话技能调用中也应该可以这样操作。」
+
+两处都确实是**名不副实的串行**：`coze_resolve.py` 是三段串行，`PdfDownloader.run()`
+的 docstring 一直写着 `local download || coze decode`，代码却是本地整段跑完才启动 coze 线程。
+
+### 工作台链路（`coze_resolve.py`，默认 `--pipeline`）
+- **本地探针流式回报**：`_verify_direct(..., on_result=…)` 从 `ex.map`（等整批探完）改为
+  `as_completed` + 逐条回调——命中直链的**那一刻**就入下载队列，不等其它探针。
+- **两波提交、共用闸门**：「明显不是文件」的大头在探针跑的同时立刻提交端点；探针否掉的那批
+  探完补送第二波。两波共用一把 `Semaphore(--concurrency)`，保证同一时刻打到端点的批数不翻倍。
+- **Coze 返回一条就入队一条**：每批返回即逐条组装并立即下载，不再攒到末尾统一下载。
+- **下载工人池**（`--dl-concurrency`，默认 3）：走 `PdfDownloader._limiter`（逐域名限速，
+  线程安全）——同域名保距串行、跨域名并行。并发若不限速，同站请求节奏会被乘上工人数直接 429。
+- **两波之外的收尾**：批次传送失败的篇目**等所有批返回后**才定性（沿用原口径：全部批失败且
+  无任何非 manual 记录 → 「端点不可用」；否则只把失败批降级为 failed），漏网目标结案为「无直链」。
+- **stats 改由最终行反推**（`_stats_from_rows`）：并发下「哪条先到」不确定，边跑边加加减减会错账
+  （例如下载失败先扣了 `coze_resolved`、随后整批判为端点不可用）。行是唯一真相，反推必然自洽。
+- `--no-pipeline` 保留串行三段做对照与排障；两条路径的 `items / stats / downloaded` **逐字段等价**（有测试钉住）。
+- 进度新增 `stage id=pipeline {work_done, work_total}`：工作单元 = 目标数（解码 + 需要时的下载算一个），
+  这是并发下唯一稳定、真实的分母；与解码并行的下载事件带 `parallel=true`，其 `total` 只是「已解出直链的篇数」
+  会一路上涨，**不参与阶段锚点**。
+
+### 上下文技能链路（`PdfDownloader.run()`）
+- coze 解码线程**提到本地下载之前**启动，coze 与本地下载真正重叠；每个子批返回即落盘（原有 P1 流水线）。
+- 「本地下载失败 → coze 兜底重试」改由 `_local_phase_done` 事件触发（本地阶段结束才放行），
+  仍排在主批次之后，不与主批次抢端点。
+- **修掉并发引入的竞态**：`local_failed_keys` 收集时排除「本来就路由到 coze」的篇目（新增 `coze_work_ids`）。
+  否则 coze 线程与本地下载并行后，coze 篇目下载失败写下的 `pdf_download_note` 会被 4b 当成
+  「本地失败」再送一次端点（重复解码 + 白烧配额）。
+
+### 前端
+- 新增流水线阶段锚点与 `parallel` 下载事件处理：并行下载**不占用阶段锚点**，避免进度条先冲到 90%
+  再被真实进度拉回（A/B 验证过：还原此处理，新测试立刻 FAIL）。
+- 阶段文案「并行推进：本地直链一到手就下载，其余同时送 Coze 解码」；下载提示改为「解码与下载并行」。
+
+### 测试（新增 2 个套件，其余 11 个全部回归通过）
+- `pipeline_e2e_test.py`（18 项）：用假端点 + 带时间戳的真下载证明——流水线下本地直链的下载
+  **在第一次 Coze 返回之前就完成**，且 Coze 提交早于本地下载结束；串行下恰好相反（本地下载要等
+  Coze 返回之后）。两模式结果等价。
+- `pdf_download_parallel_test.py`（11 项）：`PdfDownloader.run()` 的解码与下载重叠；兜底重试仍排在
+  主批次与本地阶段之后；coze 路由篇目不重复送端点。
+- `coze_download_e2e_test.py` 扩到 30 项：真实服务上验证 `start.pipeline=true`、`id=pipeline`
+  事件跑满、下载事件带 `parallel`，以及 `pipeline:false` 确实退回串行（无 pipeline 事件、无 parallel 标记、结果等价）。
+- `coze_download_ui_offline_test.js` 扩到 27 项：新增「并行流水线」场景，断言并行下载事件
+  没有把进度条顶到 90%、阶段文案带工作单元与并行 label。
+
+### 顺带修掉的两个静默失效
+- 进度通道加锁（`_EMIT_LOCK`）：流水线里探针 / Coze / 下载三类线程同时上报，整行必须原子写，
+  否则两条 NDJSON 事件会咬进同一行、调用方解析失败（表现为进度凭空丢一块）。
+- `coze_resolve.py` 补 `import threading` / `queue` / `urllib.parse`。
+
+## v1.1.3 (2026-09-19) · 结果卡文献列表可展开摘要 + 逐篇「不下载」
+
+用户反馈：「检索完成 / 唯一文献 37」下面的文献列表没有任何编辑修改功能，参考 meta-analysis
+工作台的做法——单击能看到摘要，也能把某篇改成「不下载」。
+
+### 交互（对齐 meta-analysis 工作台的 ▸/▾ + 内联详情 + 排除态）
+- 行首 **▸/▾** + 标题整行可点 → 展开**内联详情面板**：完整摘要（可滚动，无摘要时明确写「来源未提供」）、
+  作者、期刊卷期、DOI / PMID / OpenAlex 可点外链、OA 状态与 PDF 链接、被引数、引用核验状态 / 是否撤稿。
+- 每行一个 **「不下载」/「恢复下载」** 开关；标记后整行淡化。
+- 列表下方状态条：**「已排除 N 篇（不下载）」** + **「全部恢复」**；无标记时给出「点标题可展开摘要」的提示。
+- 展开态与标记态都进自有 state（`WK[mountId]`），WBList 每次重渲染（分页/排序/筛选/切语言）仍保持一致。
+
+### 状态落在磁盘上（不是在浏览器内存里）
+- 新增 `GET/POST /api/selection`，读写 **`<out_dir>/.selection.json`**（`{version, skip:[{doi,title,id}], updated}`）。
+  刷新页面、换浏览器打开同一输出目录，标记都还在。
+- 归一化口径与下载端**逐字对齐**（`_norm_token`：小写 / 合并空白 / 去尾点），且 doi/标题/OpenAlex id
+  **任一命中即同一篇**——只用 doi 会漏掉没有 doi 的预印本与指南，只用标题又怕标点差异。
+- 写入**整体替换 + 原子落盘**（tmp + `os.replace`）：下载子进程读同一份文件，半份 JSON 会让所有篇目
+  看起来「没被标记」而把刚排除的又下一遍。
+- 前端**乐观更新 + 失败回滚**：任何异常都在状态条写明原因，不静默。
+
+### 下载链路真的尊重标记
+- `adapters/coze_resolve.py` 新增 `--skip-file`（默认自动读 `<out_dir>/.selection.json`）与 `--no-skip-file`；
+  被标记篇目**照旧解码、但不落盘**，条目 `status=skipped`、`stats.skipped` 计数，**`direct_url` 保留**
+  （链接清单不残缺，用户仍可手动打开）。
+- 服务端 `/api/coze-stream` 在下载时传 `--skip-file`，`start` 事件带 `skip_count`；结果卡多一个
+  「按标记跳过」KPI 与一条说明。**「解码直链数」与「实际落盘数」刻意分开**（跳过的确实解出了直链）。
+
+### 验证
+- 新增 `selection_e2e_test.py`（43 断言，全离线）：API 契约（归一化/去重/原子写/400-404/字符串不被拆成单字符）
+  + **标记真的生效**（标 1 篇 → 只落 1 个 PDF、`stats.skipped=1`、解码仍是 2 条直链；取消标记 → 恢复 2 篇）
+  + 适配器 CLI（`--skip-file` 标题命中、`--no-skip-file`、不传参数时自动发现）。
+- 新增 `works_list_ui_offline_test.js`（41 断言）：初始即读标记、展开/收起、提交体形状、失败回滚、
+  全部恢复、归一化口径、i18n 对称。
+- 新增 `live_works_integration_test.js`（12 断言）：拿**真实 37 篇 + 真实接口**跑真实渲染代码，
+  全部展开无 `undefined`/`[object Object]`/`NaN`，并真写一次标记核对落盘后还原。
+- 旧 9 项回归全绿。
+
+### 已知后续
+- 线上发布包 `workbench/publish/` 需重新构建（`python workbench/publish-kit/build_publish.py`）后重新部署，
+  线上才有 `/api/selection` 与新列表；本地 8787 已生效。
+
+## v1.1.3 (2026-09-19) · 对话预览卡去掉「仅安全预览 (SAFE)」按钮
+
+用户反馈：对话里的确认卡上那个 `仅安全预览 (SAFE)` 按钮要去掉。
+
+- `renderIntent()` 的 `.acts` 从三按钮（确认并 --run / 仅安全预览 / 调整参数）减为两按钮
+  （**确认并联网检索 (--run)** / **调整参数**）；`data-run="0"` 在对话卡不再出现。
+- SAFE 空跑能力**没有删**，仍可从「高级检索」面板底部的 **预览 (SAFE)**（`#f_preview`）触发；
+  `startRun(spec, dry)` 签名与 `/api/search` 的 `dry` 参数保持不变，dry 运行的徽章 / 日志
+  （`runbadge safe`、`(… — no network)`）照旧显示 —— 那条路径现在只由表单入口到达。
+- `btnSafe` 词条保留（中英各一处），仍被上述徽章与日志引用；对话卡不再引用它。
+- 文档同步：`workbench/README.md` 的对话示例改为两动作，并注明 SAFE 空跑改由高级检索面板触发。
+
+## v1.1.3 (2026-09-19) · Coze 解码按钮改为「解码 + 批量下载全文 PDF」
+
+用户反馈：解码直链已经跑到这一步了，就应该顺势把 PDF 批量下载也做掉，按钮语义要改。
+
+### 语义变更
+- 结果卡主按钮 `Coze 解码全文直链` → **「解码 + 批量下载全文 PDF」**（`data-coze="dl"`，缺省行为）；
+  新增次按钮「仅解码直链」(`data-coze="links"`) 保留「只要链接清单、不落盘」的老用法。
+- 服务端 `/api/coze-stream`：`download` **缺省为开**（`body.get("download") is not False`），
+  为真时给子进程加 `--download --dir <out_dir>`（`adapters/coze_resolve.py` 早已支持，只是前端从没传过）。
+- `start` / `done` 事件新增 `download` / `pdfs_dir` / `pdf_count`（新增 `_count_pdfs()` 数盘上实际篇数，
+  因为卡片要打包的是**目录里现有的** PDF，可能含上一轮的）。
+
+### 进度
+- 下载阶段改用 **已下/总数** 精确推进（`COZE_DL_LO=90` 起，占 8 个百分点），不再用时间缓动 ——
+  篇数已知，估算反而更不准。另补 `prefilter` 阶段锚点与 `coze` 阶段的「批次 i/n」显示。
+
+### 结果卡
+- 新增「本次已下载 N」「pdfs/ 现有 N 篇」两个 KPI；本次一篇没下到时给出明确说明（而非静默）。
+- 新增 **「打包下载 N 篇 PDF」**：先 `GET /api/artifacts?dir=<out>/pdfs` 本地核对件数/体积，
+  再提交 `/api/zip`；超 2000 件 / 2 GB 给中文提示。**为什么先核对**：直接提交的话服务端 413
+  会落在隐藏 iframe 里，用户只会觉得"点了没反应"。
+- 新增「打开 PDF 文件夹」（`artSetDir(<out>/pdfs)` + `showView`）。
+
+### 验证
+- `coze_download_ui_offline_test.js`（21 断言）：请求体 `download` 真假、下载阶段 5/10→94%、
+  卡片 KPI/按钮、打包 payload 只收 `.pdf`、空目录不提交、仅解码时无打包按钮。
+- `coze_download_e2e_test.py`（22 断言，**完全离线**）：起本机 HTTP 服务伺服假 PDF（>5 KB，
+  否则过不了 `_download_to` 的 5 KB 校验），把 OA 链接指向它 → 本地预筛命中、不呼叫外网端点 →
+  验 `--download` 真落盘、`pdf_count`、`downloaded`、`%PDF-` 魔数，并顺手把刚下到的 PDF 打包解压比对字节。
+
+### ⚠️ 本轮踩到的工具坑（重要）
+- **同一文件并行 Edit 会互相覆盖，且报"成功"**。本轮 6 处改动被静默吞掉（前后端都有），
+  包括最关键的服务端 `if _dl:` —— 导致「下载」开关根本没接上，而 py_compile / 语法检查全绿
+  （未定义名是运行时错误）。**教训：同一文件的多处编辑必须串行**；改完要用「grep 关键串 +
+  行为级测试」验证，不能只信 Edit 的成功回执。
+- 由此新增 `i18n_audit.js`：抠出 `WB_T` 求值，比对 zh/en 键集**双向对称** + 页面引用的键是否齐备。
+  被吞掉的字典改动会表现为「界面显示原始 key」，这个脚本把它变成显式失败（本轮据此修好 335/335）。
+
+## v1.1.3 (2026-09-19) · 「输出文件」进入即刷新 + 检索过程只读 + PDF 一键打包
+
+用户反馈三条：① 第一次进入「输出文件」面板是空的，必须手点「刷新」才出内容，很别扭；
+② 「检索过程」分组完全没必要给下载；③ 「全文 PDF」应该能一次性打包下载。
+
+### ① 进入面板自动读盘（根因：指向了一个早已删除的对象）
+- 根因：`showView()` 里写的是 `if(v==="artifacts") wbArt && wbArt.refresh();`，而 `wbArt` 是上一版
+  WBList 产物列表的全局对象，**重构为自写渲染后已经不存在**。`wbArt && …` 短路为假，所以
+  「进入视图」这条路从来没触发过读盘 —— 首屏空白、必须手点「刷新」（那个按钮走的是另一条路）。
+- 修复：`showView("artifacts") → loadArtifacts()`，进入即读盘。两处「查看输出文件」跳转按钮
+  改为只设路径 + `showView(...)`，避免「showView 一次 + 手动又一次」抓两遍。
+- 新增请求序号 `artReq`：连点 / 快速切目录时**后发请求胜出**，旧响应回来直接丢弃，不会回写过期内容。
+- 首次读取且尚无内容时显示「读取目录中…」占位，避免「看着像坏了」。
+- Coze 解码完成时若正在看该目录，顺手 `loadArtifacts()` 刷新（原为 `wbArt` 死代码）。
+- 回归防线：源码级断言「不再存在 `wbArt.refresh()` 调用」+ **行为级**断言（抠出真实 `showView`
+  源码执行，验证 `showView("artifacts")` 真的触发了读盘）。
+
+### ② 「检索过程」只读，去掉下载入口
+- `artDescribe()` 归类为 `proc` 的文件（`.coze_links.json` / `evidence_log.*` / `prisma*` / `.log` / 其余 `.json` / 未匹配的 `.md`·`.txt`）
+  只渲染「查看」（浏览器内联打开），**不再渲染「下载」按钮**；不可预览的类型显示「仅供排错查看」。
+- 分组说明改为「命令与原始返回记录，仅供排错查看（不提供下载）」，让规则的**理由**可见。
+- 报告 / 题录数据 / 全文 PDF 的下载不受影响（断言覆盖）。
+
+### ③ 全文 PDF 与文件夹一键打包（新增 `GET/POST /api/zip`）
+- **服务端**：新增流式 zip 端点，`{dir, names[], dirs[]}`（JSON，或 UI 实际使用的表单 `payload=`）。
+  - 边压边发（chunked，`zipfile` 走不可 seek 流 + data descriptor），**不落临时文件、不占内存**——
+    上百篇 PDF 也不会把服务器或浏览器撑爆。
+  - 只打包 `.pdf` 时用 `ZIP_STORED`（PDF 本身已压缩，存比压更快且无损），混类型才 `ZIP_DEFLATED`。
+  - `dirs` 递归打包子目录，**跳过隐藏文件/隐藏目录**；显式点名隐藏文件仍会打包。
+  - 包内附 `_bundle_info.txt`：来源目录 / 实际件数 / 体积 / 构建时间 / 中途跳过的不可读文件。
+  - 安全限流：相对路径 `..` 拒绝（穿越防护）；>2000 件或解压后 >2 GiB 返回 413 并提示缩小范围。
+- **前端**：`全文 PDF` 组头加「打包下载 N 项」（只看用途分组，**不截断**，193 篇就是 193 篇）；
+  每个文件夹行加「打包」（整目录递归）。打包是**新增入口**，单篇「下载」保留。
+- **前端提交方式**：隐藏 `form` + 隐藏 `iframe` POST，让**浏览器原生接管下载**（有进度、可取消、可重试），
+  不把 zip 读进 JS 内存，也不会让当前页面跳走。提交后在面板顶部给一条可关闭的状态条
+  （件数 / 体积 / 「在下载栏里看进度」），空集合 / 超限时给可操作的警告而不是静默失败。
+
+### 验证
+- 服务端 `zip_endpoint_test.py`：21 项全过（真起 handler、真发 HTTP、真解压校验 CRC；含 PDF STORED、
+  子目录递归、隐藏文件跳过、`..` 穿越拒绝、404/400/413、`_bundle_info.txt` 内容、GET 形式）。
+- 前端 `artifacts_ui_offline_test.js`：44 项全过（含 proc 无下载、文件夹有打包、筛选后只打包命中项、
+  空集合不提交、`showView` 行为级断言、中英 316 键对齐、13 个新键双语齐备）。
+- `live_artifacts_integration_test.js`：拿**真实 8787 服务返回**喂真实渲染代码，并把组头「打包下载」
+  提交上去，端到端解出真实 PDF（810 KB，CRC 正常）——覆盖「离线假数据恰好长得对」的盲区。
+
+## v1.1.3 (2026-09-19) · 「输出文件」面板重构（可读性 + 目录导航 + 真相校验）
+
+用户反馈：「产物浏览界面还是不对，不知道怎么用」。根因是面板只有一个裸文件列表 + 一行图例，
+既不解释每个文件是什么，也无法返回上级目录，且默认固定在 `./out`。
+
+- **重命名为「输出文件」**（导航 / 标题 / 对话卡片按钮 `产物浏览` → `查看输出文件`），去掉「产物」这类需要解释的行话。
+- **按用途分组**：子目录 / 报告 / 题录数据 / 全文 PDF / 检索过程 / 其他，每组带一句说明与计数。
+- **每个文件一句人话说明**（`artDescribe()`）：例如 `lit_report.html` → 网页版检索报告（可打印成 PDF）、
+  `references.bib` → BibTeX 引文（EndNote / Zotero 导入）、`.merged.json` → 多源合并去重后的完整题录。
+- **显式按钮**：可预览类型给「查看」（浏览器新标签）+「下载」；xlsx/zip 只给「下载」（主按钮）。
+  徽标按用途着色（表格绿 / PDF 红 / 过程灰 / 目录中性）。
+- **目录导航**：新增「↑ 上一级」（此前只能进不能出）、回车即跳转、文件名筛选框、
+  以及三个快捷入口（最近一次检索输出 / 工作台默认 `./out` / 上级目录）。
+- **空态与错误态可操作**：空目录给出「去跑一次检索」；目录不存在给出路径 + 一键跳回最近一次检索输出。
+  另：`/api/artifacts` **不再自动创建目录**（此前输错路径会静默建空目录）。
+- **自动定位**：`/api/status` 新增 `last_out_dir` / `cwd`；面板目录不存在时自动跳到**最近一次检索的输出目录**
+  （此前只要检索写在别处，面板就永远空白，看起来像坏了）。
+- 大目录（如 193 篇 `pdfs/`）默认只渲染前 40 行 + 「显示全部 N 项」，避免一次插入上千个 DOM 节点。
+- 离线验证脚本 `artifacts_ui_offline_test.js`（stub DOM 跑真实页面代码）：14 项断言全过，
+  含分组顺序、按钮可见性、徽标着色、大目录截断、空态/错误态、中英字典 302 键对齐。
+
+## v1.1.3 (2026-09-19) · Coze 解码「180 秒超时」根因修复（本地预筛 + 拆批并发 + 超时口径）
+
+用户报错原文：`Command '[...coze_resolve.py, --in, ./out\.merged.json]' timed out after 180 seconds`。
+
+- **根因（三层，均非用户操作问题）**：
+  1. **超时口径错**：报错来自**一次性**接口 `/api/tools` → `_subprocess_text(timeout=180)`。
+     实测该端点**单批（50 篇）解码要数分钟**（3 篇的一批也要 88s），180s 必然先到；
+     >50 篇时脚本按 50/批**串行**传送，总时长 = 批数 × 单批时长，180s 更无可能。
+  2. **前端口径**：前端在流式端点不可用时会静默回退到上述一次性接口，
+     于是把 Python 的 `TimeoutExpired` 原文直接摊给用户看。
+  3. **做了大量无用功**：`coze_resolve.py` 把**所有** key 都送端点，
+     而实测检索结果里**约 2/3 本身就是文件直链**（bioRxiv/medRxiv `.full.pdf`、Nature/UCL 等），
+     端点只是把可直下的链接再"解码"一遍。端点单篇约 19s，这部分纯属白等。
+- **修复**：
+  1. `workbench/server.py`：新增 `COZE_LEGACY_TIMEOUT_S = 420`（一次性接口专用），
+     并捕获 `TimeoutExpired` 返回**可操作的中文说明**（含本次篇数/批数 + 建议改走流式），
+     不再把 `Command '[...]' timed out after N seconds` 抛给用户。
+  2. `adapters/coze_resolve.py`：拆批传送改为**并发**（`--concurrency`，默认 3），
+     总时长由「Σ 各批」降为「最慢的一批」；每批独立降级，单篇仍只发送一次。
+  3. `adapters/coze_resolve.py`：新增**本地预筛**（默认开，`--no-direct-prefilter` 关闭）：
+     - 预印本 `.full.pdf` 走**规则认定**（bioRxiv/medRxiv 对机器人 UA 一律 403/429，
+       批量探测必然被限速，校验结果不可信）→ 标记 `preprint_direct`；
+     - 其余疑似直链用**浏览器头 + `Range: bytes=0-1023`** 实测（**不能用裸 HEAD**：
+       裸 HEAD 会把能直下的预印本误判为不可下）→ 标记 `local_direct`；
+     - 实测本机 193 篇：**112 篇本地即得直链**（预印本 100 + 实测 12，耗时 16.6s），
+       送端点的从 193 降到 **81**（4 批 → 2 批）。结果卡新增说明，标注两类来源。
+  4. `workbench/server.py`：结果卡/接口透传 `concurrency` 与 `direct_prefilter`。
+- **顺带修正一处真实 bug**：开跑前用 `os.remove` 清理上一轮 `.coze_links.json`，
+  在沙箱环境会被安全删除拦截 → 残留旧文件被当作**本轮 done** 上报（实测：取消后竟上报旧结果）。
+  改为**按 mtime 判定结果新鲜度**，不再依赖删除是否成功。
+- **已知事实（非代码问题）**：该端点 `CT_ENABLE_BROWSER_PDF_DOWNLOAD` 未启用，
+  B 路径（浏览器下载）不可用，因此付费墙 / 仅有 DOI 的文献会返回 `pdf_failed`
+  （`error`: "A 路径(OA/PMC/直链)全部失败；B 路径(浏览器)未启用"）。需要解码此类文献，
+  须在端点侧开启该开关。
+
+## v1.1.3 (2026-09-19) · Coze 全文解码「长等待」体验修复（流式进度 + 取消 + 正确状态）
+
+- **问题**：点「Coze 解码全文直链」后界面只显示一句静态文案，30–180 秒内毫无变化（用户反馈"速度很慢，
+  最好给提示或进度条"）。
+- **修复（三层）**：
+  1. `adapters/coze_resolve.py`：新增 `--progress {off,text,json}`，向 **stderr** 逐行 flush 结构化进度
+     （`stage` 阶段：load / identify / coze[含批号] / assemble / download / done；`log` 日志；
+     拆批时逐批上报）。stdout 仍只承载最终 JSON（`--out` 写文件时摘要也改走 stderr）；
+     同时给 `PdfDownloader` 传入 progress 回调——**此前该回调未传，`_log` 全部被丢弃，进度等于没有**。
+  2. `adapters/pdf_download.py::_parse_coze_stream`：SSE 事件**边到边报**（原来先把整流读完再打印，
+     日志只能在结束后一次性涌出），并按节点标题 / 输出字节数 / 已用时上报；`ping` 保活事件每 20s
+     转成一条心跳日志。
+  3. `workbench/server.py` 新增 `POST /api/coze-stream`：chunked NDJSON 推 `start / stage / progress /
+     tick(每5s) / done / error`；子进程 `PYTHONUNBUFFERED=1` + `-u`；**静默超时 200s** 判定端点无响应并
+     终止（逐批场景每批都有输出，不会误杀）；客户端断开 / 点取消即 terminate 子进程；
+     `/api/stop` 同时覆盖解码子进程；跑之前先删旧 `.coze_links.json`，避免把上一轮结果当本轮成功上报。
+  4. `workbench/index.html`：解码卡改为实时卡（阶段名 + 已用时 + 进度条 + 日志滚动 + 取消按钮），
+     进度为「阶段锚点 + 时间缓动」并**明确标注"按时间估算"**；20 秒后出现慢速提示；
+     老服务无该端点时自动回退一次性 `/api/tools`。
+- **顺带修正两处真实 bug**：
+  - `coze_resolve.py` 的 `coze_unavailable = (projects is None)` 写在兜底填充**之后**，恒为 False
+    → 端点不可达被误报为 `pdf_failed`（"无直链"）。已前移判定：端点连不上时正确返回
+    `status=unavailable` / `stats.coze_unavailable=N`，界面据此提示"端点无响应，检索产物不受影响"。
+  - 多批传送**全部失败**时同样判为端点不可用（不再逐篇报"无 OA"）。
+
+## v1.1.3 (2026-09-17) · 飞书版本字段落点对齐（ct-base coze_io_contract §2.1）
+
+- **结论：ct-literature 客户端本来就合规，本次只补文档约束、无行为改动。**
+  ct-base §2.1（2026-09-17 定）规定版本字段（`skill_version` / `coze_version`）唯一落点是
+  飞书 `resultstr`，`querystr` 不存版本信息。逐项核对本技能：
+  1. `adapters/fetch_coze_unified.py` / `adapters/pdf_download.py` 均按 §1.2 发**顶层信封**
+     `skill_version`（读本地 SKILL.md `version:`，与 `query_origin` 同级）→ 位置正确；
+  2. 汇总审计 `querystr`（`scripts/ct_literature.py` 的 `type=literature_summary` payload）
+     只含统计信息，**不含**任何版本键 → 合规；
+  3. 本技能**无自有 coze 端点**（文献检索 / PDF 批量下载共用 ct-registry 的 ct-search 端点）
+     → 版本字段由端点侧写入 `resultstr`，随 registry 端点重新部署生效。
+- **文档补强**：`pdf_download.py` 信封注释、`fetch_coze_unified.py` 的 `querystr` 参数文档、
+  `ct_literature.py` 汇总 payload 注释，均加 🔴 标注「版本字段只落 resultstr，禁止塞进 querystr」。
+
+## v1.1.3 (2026-09-14) · 新增 DOI 专项校验 `--verify-dois` + `scripts/verify_dois.py`
+
+- **背景**：ct-update 例行检查 P1（`ct-literature::H`）——错误表既有条目「DOI dedupe
+  merged too aggressively / 两篇论文共享一个 DOI 笔误」缺少**专项核查与人工复核清单**；
+  既有 `--verify` 的 DOI 一致性虽有实现，但结论混在 `citation_*` 通用字段里，不便单列。
+- **新增（增量、向后兼容）**：
+  - `adapters/verify_citations.py`：新增 `_with_doi_flags()` 在 DOI 路径上追加
+    `doi_verified` / `doi_mismatch` / `doi_mismatch_note` 三个附加字段（旧消费者忽略）；
+    新增 `verify_doi_only()`（仅走 DOI，不回退 PMID/OpenAlex）、`collect_doi_mismatches()`、
+    `render_doi_mismatch_report()`。出站调用仍全部收口在 adapters/（ct-base §16.9）。
+  - `scripts/verify_dois.py`（新）：对既有 `.merged.json` 做 DOI 专项校验的独立 CLI，
+    默认 SAFE PREVIEW（无 `--run` 不联网、不落盘），`--run` 时回写 doi_* 字段并产出
+    `doi_mismatch.md` 人工复核清单。
+  - `scripts/ct_literature.py`：新增 `--verify-dois`（默认关，需 `--run`）——主流水线在
+    正常导出后追加产出 `doi_mismatch.md`；未开启时行为与旧版逐字节一致。
+- **判定口径**：Crossref 标题 + 第一作者姓氏模糊匹配（阈值沿用 0.80/0.85）；不匹配 →
+  `doi_mismatch=true`，报告标注「建议人工复核」；解析失败 → `unresolved`；DOI 缺失 → `no_doi`。
+- **风险**：CrossRef 速率限制（沿用 http_utils 连接池限速）；标题缩写差异可能少量误报，
+  报告已明确标注人工复核，不做自动删除。
+- **实测**：样本 4 篇（1 正确标题 / 1 标题不符 / 1 伪造 DOI / 1 无 DOI）→
+  `verified=0 / mismatch=2 / unresolved=1 / no_doi=1`，`doi_mismatch.md` 正确高亮 2 条。
+
+## v1.1.2 (2026-09-11) · 新增 `log_only` 审计留痕模式（配合 Coze 端 `mode: log_only`）
+
+- **背景**：`run()` 末尾的飞书汇总统计调用在 v1.1.1 用 `force_coze=True` 送达 Coze 后，
+  Coze 端仍会执行一次完整检索 —— 汇总本身无需检索结果，纯属浪费配额。
+- **新增**：`dispatch()` / `dispatch_stream()` 新增 `mode: str = "search"` 参数；
+  `mode="log_only"` 时隐含 `force_coze=True`，payload 额外携带 `"mode": "log_only"`，
+  Coze 端 `route_by_mode` 识别后直连 `feishu_write_node`，仅写审计记录、跳过全部检索节点。
+  飞书 resultstr 仅含 `runtime_sec`，不含 `hit_count`（不谎报 0 命中）。
+- **CLI**：新增 `--force-coze`（已有）与 `--log-only`（隐含 --force-coze）。
+- **默认行为不变**：`mode` 默认 `"search"`，所有既有调用路径零影响。
+- **Coze 端**：需同步部署 `ct-registry/adapters/coze` v0.2.0（graph.py route_by_mode
+  新增「审计留痕」分支 + state.py 新增 `mode` 字段 + feishu_write_node log_only 输出）。
+  未部署前客户端发 `mode=log_only` 会被 Coze 端忽略而照常检索（向后兼容降级）。
+- **回归**：`tests/regression_force_coze.py` 扩至 24 项（T6 payload mode 断言、
+  T7/T8 log_only 绕过本地直连与送达断言）；Coze 镜像自检
+  `ct-registry/adapters/coze/scripts/selfcheck_log_only.py` 19/19 通过。
+- **汇总调用**：`run()` 的飞书汇总现传 `mode="log_only"`（与 `force_coze=True` 双保险）。
+
+## v1.1.1 (2026-09-11) · 修复：飞书汇总留痕被本地路由静默吞掉
+
+- **根因**：`run()` 末尾的「飞书汇总」调用（`log_feishu=True`）用 `source="openalex"`，
+  而 `dispatch()` 对「openalex + 本机配了 OpenAlex key」会在到达 Coze 前**早返回本地
+  直连**，`log_feishu` 随之被静默丢弃 —— 与源码注释「最终汇总记一条飞书」矛盾，
+  审计记录在配了 key 的机器上**从未落库**。
+- **修复**：`dispatch()` / `dispatch_stream()` 新增 `force_coze: bool = False` 逃生开关，
+  置 True 时跳过「openalex 有 key」与「semantic_scholar 本地化」两处早返回；
+  汇总调用显式传 `force_coze=True`。CLI 同步新增 `--force-coze`。
+- **默认行为不变**：`force_coze=False` 时既有本地优先路由完全保持（中间检索调用不受影响）。
+- **回归测试**：新增 `tests/regression_force_coze.py`（纯本地、无需网络）13 项断言，
+  覆盖「有 key 默认走本地 / force_coze 绕过并送达 log_feishu+querystr / semantic_scholar
+  同样可绕过 / 无 force_coze 行为不回归 / 汇总调用点源码断言」。
+
+## v1.1.0 (2026-09-11) · 新增 `--sources` 检索源子集（供 meta-analysis A1 消费）
+
+- **新增 CLI 参数 `--sources`**：逗号分隔的源子集，设了即**覆盖**各 `--with-*` /
+  `--cochrane` 默认——所列即启用，未列即关闭。规范名与 `fetch_coze_unified._SOURCE_DISPLAY`
+  一致：`OpenAlex, EuropePMC, bioRxiv, medRxiv, SemanticScholar, arXiv`，另支持本地专属
+  模式 `PROSPERO`（`--with-prospero`）、`Guidelines`（`--with-guidelines`）、`Cochrane`
+  （EuropePMC journal filter）。
+- **语义细节**：`PubMed` 作为**别名**并入 EuropePMC（MEDLINE/PMC 索引，非独立源）；
+  **OpenAlex 为管线基座**，`run()` 无条件启用，`--sources` 无法将其关闭（未列时 stderr 提示）；
+  未知源名 → `[ERROR] unknown --sources: …` 且非零退出（杜绝静默漏检）。
+- **消费方**：meta-analysis A1 选题阶段「改检索范围」修订——`tool_card params.sources`
+  → `tool_mapping_meta.json` 的 `arg_map("sources"→"--sources")` → 本参数。此前该字段被
+  静默丢弃（ct-literature 无 `--sources` 参数），2026-09-11 实测补齐。
+- **预览模式**（不带 `--run`）会打印解析后的源清单（`sources=[OpenAlex + EuropePMC, …]`），
+  便于 agent 在无网络时核对选择。
+- 验证：`--sources "OpenAlex,EuropePMC"` → `[OpenAlex + EuropePMC]`；
+  `--sources "OpenAlex"` → `[OpenAlex]`；无参 → 默认 `[OpenAlex + EuropePMC, bioRxiv, medRxiv]`
+  （向后兼容，行为不变）；`--sources "OpenAlex,Bogus"` → 报错退出。
+
+## v1.0.3 (2026-09-08) · CLI 默认翻转：online（Coze 统一检索 + 飞书审计留痕）
+
+- **默认行为变更（用户 2026-09-08 拍板）**：CLI 不带任何模式 flag 时，检索改为走 **Coze 端统一检索**（6 源经服务端），并在结束时自动记一条飞书汇总（`type=literature_summary`，querystr 原样落库）。此前默认是本地直连（不经 Coze、飞书零记录），正式调用常在无感知中丢失审计留痕（同日实测踩坑：100 篇检索后台无任何记录）。
+- **新增 `--local`**：显式本地直连各源公共 API（即旧默认行为；不经 Coze）。本地模式无飞书记录属预期，不再向用户输出任何飞书相关提示。
+- **飞书留痕对用户静默**：汇总成功/失败均不打印 human 可见行（仅 `--progress json` 事件流保留 `feishu_summary` / `feishu_summary_failed` 供 agent 诊断）。
+- **`--online` 降级为兼容 no-op**（默认已开启，保留 flag 使既有脚本/门控命令跨版本安全）；`--offline` 语义不变（强制本地兜底，优先级最高）。
+- **`run()` 函数签名默认值保持 `online=False` 不变**——程序化调用方零影响，仅 CLI 层翻转默认。
+- 健壮性前提：online 模式已有 `_coze_dispatch_with_fallback`（Coze 不可用/未授权自动降级本地 fetch），默认翻转不会使检索变脆弱（已实测确认降级路径存在）。
+- 验证：默认模式（无 flag）→ `[OK] 飞书汇总已记录`；`--local` → 跳过提示行出现；`py_compile` / `--help` 通过。
+
 ## v1.0.2 (2026-09-08) · PDF 下载链健壮性加固（回写职责下沉 + 结果面板护栏）
 
 - **PDF 下载完成自动回写 Excel「PDF 本地路径」列（用户 2026-09-08，根因修复）**：

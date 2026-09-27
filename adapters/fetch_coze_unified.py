@@ -20,6 +20,17 @@ WHY / 设计动机
   - 中间调用（6 个 source 并行检索）传 log_feishu=False → 不记飞书
   - 最终汇总调用传 log_feishu=True → 只记一条汇总
   - 老版本终端不传此字段 → 默认 True → 行为不变
+  - 注意（2026-09-11 修）：log_feishu 只在请求真正到达 Coze 时才生效。而
+    dispatch 对「openalex + 本机有 key」会早返回本地直连、对 semantic_scholar
+    恒本地化——留痕类调用必须同时传 force_coze=True，否则审计记录被静默吞掉。
+
+mode（2026-09-11 新增）：
+  - "search"（默认）：真实检索，Coze 端走 search_node。
+  - "log_only"      ：**仅写飞书审计留痕、不做任何检索**。Coze 端 route_by_mode
+    据此直连 feishu_write 节点（跳过检索），只为落一条 audit 记录。汇总类调用用它
+    取代「借一次真实检索顺手留痕」——不再白跑一次检索、不浪费配额、不污染结果日志。
+    log_only 隐含 force_coze=True（留痕必须真正到达 Coze）。CLI：`--log-only`。
+    要求 querystr 携带审计内容（否则留痕行没内容可写）。
 
 用法：
   python adapters/fetch_coze_unified.py --source openalex --keyword "osimertinib" --run
@@ -409,7 +420,8 @@ def _coze_stream_once(body, timeout):
 def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = None,
              max_results: int = 50, run: bool = False, log_feishu: bool = True,
              timeout: int = 300, offline: bool = False,
-             querystr: str = None, skillname: str = None) -> Optional[Dict]:
+             querystr: str = None, skillname: str = None,
+             force_coze: bool = False, mode: str = "search") -> Optional[Dict]:
     """统一外发检索，返回结构化结果。
 
     Args:
@@ -422,8 +434,20 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
         log_feishu: 是否记飞书（中间调用=False，最终汇总=True）
         timeout: HTTP 超时秒数
         offline: 强制本地兜底（不调 Coze）
-        querystr: 审计 querystr JSON 字符串（透传飞书 querystr 列；None 则不携带）
+        querystr: 审计 querystr JSON 字符串（透传飞书 querystr 列；None 则不携带）。
+            🔴 版本字段（skill_version / coze_version）**不得**放进这里——§2.1（2026-09-17 定）
+            规定版本字段唯一落点是飞书 resultstr（由 coze 端写入）；客户端只需按 §1.2
+            发顶层信封 `skill_version`，不要在本参数内重复携带。
         skillname: 飞书审计 skillname 覆盖（None=Coze 端按 source 推导）
+        force_coze: 强制走 Coze，跳过「本地直连」早返回（openalex 有 key /
+            semantic_scholar 本地化）。用于**留痕类调用**——这类调用必须真正到达
+            Coze 端，否则 `log_feishu` 被本地路由静默吞掉、审计记录丢失。
+            默认 False（保持既有的本地优先行为不变）。
+        mode: 工作模式，透传到 Coze 端 `mode` 字段。默认 `"search"`（真实检索）。
+            `"log_only"` = **仅写飞书审计留痕、不做任何检索**（Coze 端 route_by_mode
+            据此直连 feishu_write 节点）——这类调用没有任何检索结果可返回，`source`
+            只用于保持既有签名兼容，不产生实际检索。log_only 隐含 force_coze=True：
+            留痕调用必须真正到达 Coze，否则记录丢失。（2026-09-11 新增）
 
     Returns:
         {"source": 规范名, "works": [...], "count": N, "total_count": N} 或 None（预览模式）
@@ -431,11 +455,17 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
     if source not in DISPATCHABLE_SOURCES:
         raise ValueError(f"unsupported source: {source}. Must be one of {sorted(DISPATCHABLE_SOURCES)}")
 
+    # log_only 是纯留痕调用：必须真正送达 Coze，否则飞书那条记录就没了。
+    # 在此强制打开 force_coze，避免调用方忘记传而被打包进「本地直连」早返回。
+    if mode == "log_only":
+        force_coze = True
+
     # Semantic Scholar 本地化（用户决策 2026-09-06）：有 key 用户走本地直连，
     # 不经过 Coze——私人 key 零传递最安全，本地 fetch_semantic_scholar.py 本就支持
     # key（1 RPS 专属）；无 key 本地模块自行跳过（与老版本一致）。Coze 端
     # semantic_scholar_node 仅服务无本地检索能力的调用方（无 key 时跳过）。
-    if source == "semantic_scholar":
+    # force_coze=True 时跳过此早返回（留痕类调用必须到 Coze）。
+    if source == "semantic_scholar" and not force_coze:
         if not run:
             print(json.dumps({
                 "source": source, "mode": "local", "note": "semantic_scholar 本地直连（有 key 用户，不经 Coze）",
@@ -447,7 +477,9 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
     # 不经过 Coze——key 零传递 + 进 keyed pool（100k credits/天，无 429），本地
     # fetch_openalex.py 经 build_openalex_headers 带 mailto polite-pool + Bearer key。
     # 无 key 仍走 Coze（openalex_node 匿名池可用，与 S2"无 key 必 429"不同，不需跳过）。
-    if source == "openalex" and _has_openalex_key():
+    # force_coze=True 时跳过此早返回：留痕类调用（如末尾飞书汇总，log_feishu=True）
+    # 必须真正到达 Coze，否则被本地路由吞掉、审计记录静默丢失（2026-09-11 修）。
+    if source == "openalex" and _has_openalex_key() and not force_coze:
         if not run:
             print(json.dumps({
                 "source": source, "mode": "local", "note": "openalex 本地直连（有 key 用户，keyed pool，不经 Coze）",
@@ -462,7 +494,9 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
     # 构造 payload
     payload = {
         "source": source,
-        "mode": "search",
+        # mode 由调用方决定："search"（默认，真实检索）/ "log_only"（仅写飞书留痕，
+        # Coze 端 route_by_mode 直连 feishu_write，跳过检索节点）。
+        "mode": mode,
         "keyword": keyword,
         "max_results": max_results,
         "log_feishu": log_feishu,
@@ -535,7 +569,9 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
 def dispatch_stream(source: str, keyword: str, year_from: int = None, year_to: int = None,
                     max_results: int = 50, run: bool = False, log_feishu: bool = True,
                     timeout: int = 300, offline: bool = False, querystr: str = None,
-                    skillname: str = None, batch_size: int = 5, progress=None) -> "Generator[List[Dict], None, None]":
+                    skillname: str = None, batch_size: int = 5, progress=None,
+                    force_coze: bool = False,
+                    mode: str = "search") -> "Generator[List[Dict], None, None]":
     """流式检索生成器：把 Coze 返回的 works 按 batch_size 切片，依次 yield 给调用方。
 
     设计（对应「对 coze 的调用改为流式调用，5 个一批依次返回」）：
@@ -548,6 +584,9 @@ def dispatch_stream(source: str, keyword: str, year_from: int = None, year_to: i
     Args:
         batch_size: 每批返回篇数（默认 5）。
         progress: 可选 fn(msg) 进度回调。
+        mode: 工作模式，透传给 dispatch()（"search" 真实检索 / "log_only" 仅留痕）。
+            修复 2026-09-26：2026-09-11 给 dispatch 加 mode 参数时漏改本函数签名，
+            导致内部 `mode=mode` 引用未定义全局名，流式检索一执行即 NameError。
 
     Yields:
         List[dict] —— 每批 work（本地统一格式，含 doi/title/source 等）。
@@ -556,7 +595,8 @@ def dispatch_stream(source: str, keyword: str, year_from: int = None, year_to: i
         batch_size = 1
     result = dispatch(source, keyword, year_from, year_to, max_results,
                       run=run, log_feishu=log_feishu, timeout=timeout, offline=offline,
-                      querystr=querystr, skillname=skillname)
+                      querystr=querystr, skillname=skillname, force_coze=force_coze,
+                      mode=mode)
     if result is None or result.get("error"):
         msg = f"[coze] 检索失败: {result.get('error') if result else 'None'}"
         if progress:
@@ -589,6 +629,8 @@ def main():
                     default=True, help="是否记飞书（默认 True，中间调用设 False）")
     ap.add_argument("--timeout", type=int, default=300, help="HTTP 超时秒数（默认 300）")
     ap.add_argument("--offline", action="store_true", help="强制本地兜底（不调 Coze）")
+    ap.add_argument("--force-coze", action="store_true",
+                    help="强制走 Coze，跳过本地直连早返回（留痕类调用用：保证 log_feishu 生效）")
     ap.add_argument("--token", default=None, help="Coze Bearer token（优先级最高）")
     ap.add_argument("--stream", action="store_true",
                     help="流式返回：works 按 --batch-size 切片逐批输出（默认 5 篇/批）")
@@ -599,6 +641,11 @@ def main():
     # 注入 CLI token
     if args.token:
         _resolve_token._cli_token = args.token
+
+    # --log-only → mode=log_only（仅写飞书留痕，不检索）；否则默认 search
+    _mode = "log_only" if args.log_only else "search"
+    # log_only 隐含 force_coze（dispatch 内也会兜底强制），此处显式合并便于调试打印
+    _force_coze = args.force_coze or args.log_only
 
     if args.stream:
         n_batches = 0
@@ -613,6 +660,8 @@ def main():
             timeout=args.timeout,
             offline=args.offline,
             batch_size=args.batch_size,
+            force_coze=_force_coze,
+            mode=_mode,
         ):
             n_batches += 1
             print(f"--- batch {n_batches} ({len(batch)} works) ---")
@@ -630,6 +679,8 @@ def main():
         log_feishu=args.log_feishu,
         timeout=args.timeout,
         offline=args.offline,
+        force_coze=_force_coze,
+        mode=_mode,
     )
 
     if result is not None:

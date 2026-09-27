@@ -33,6 +33,18 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Doc-type screening (ported from meta-analysis pdf_extractor empirical rules):
+# used when the user asks for original research only — excludes
+# review / guideline / protocol records at title/abstract level.
+try:
+    from doc_type_filter import classify_record
+    _NON_ORIGINAL_TYPES = ("review", "guideline", "protocol")
+    _VALID_TYPES = ("original", "review", "guideline", "protocol")
+except Exception:  # pragma: no cover - keep screen working without the module
+    classify_record = None
+    _NON_ORIGINAL_TYPES = ()
+    _VALID_TYPES = ()
+
 # Reuse the existing safety lexicon (single source of truth).
 try:
     from fetch_openalex import SAFETY_LEXICON  # type: ignore
@@ -71,12 +83,28 @@ def _is_safety(work):
     return any(k in blob for k in SAFETY_LEXICON)
 
 
-def _passes_screen(work, topic_tokens, review_type, safety):
+def _passes_screen(work, topic_tokens, review_type, safety,
+                   exclude_non_original=False, require_types=None):
     """Return (included:bool, reason:str|None)."""
     title = work.get("title") or ""
     abstract = work.get("abstract_snippet") or ""
     if not title and not abstract:
         return False, "no-title-abstract"
+
+    # Doc-type gate (classify_record, ported empirical rules):
+    #  - exclude_non_original: user wants original research only
+    #    (excludes review/guideline/protocol; unknown passes).
+    #  - require_types: inverse mode, user wants ONLY the listed types
+    #    (unknown is excluded — when a type is explicitly requested,
+    #     signal-less records must not slip in).
+    if classify_record is not None and (exclude_non_original or require_types):
+        cls = classify_record(title, abstract, work.get("pub_types"))
+        if require_types:
+            if cls["type"] not in require_types:
+                return False, "type-not-required:%s" % cls["type"]
+        elif cls["type"] in _NON_ORIGINAL_TYPES:
+            return False, "non-original-type:%s" % cls["type"]
+
     blob = _norm(" ".join([title, abstract]))
 
     # Safety mode: any safety lexicon hit earns inclusion.
@@ -107,7 +135,8 @@ def _passes_screen(work, topic_tokens, review_type, safety):
 
 
 def screen(works, topic="", review_type="all", safety=False,
-            duplicates_removed=None):
+            duplicates_removed=None, exclude_non_original=False,
+            require_types=None):
     """Return {'works': annotated, 'prisma': {...}}.
 
     Incremental-compatible: original fields preserved; only prisma_* keys added.
@@ -125,7 +154,9 @@ def screen(works, topic="", review_type="all", safety=False,
             annotated.append(w)
             continue
         w = dict(w)
-        ok, reason = _passes_screen(w, topic_tokens, review_type, safety)
+        ok, reason = _passes_screen(w, topic_tokens, review_type, safety,
+                                    exclude_non_original=exclude_non_original,
+                                    require_types=require_types)
         if ok:
             included += 1
             w["prisma_stage"] = "included"
@@ -171,12 +202,26 @@ def main():
     ap.add_argument("--topic", default="", help="topic query (used for relevance rule)")
     ap.add_argument("--review-type", default="all")
     ap.add_argument("--safety", action="store_true", help="safety / CSM bias mode")
+    ap.add_argument("--exclude-non-original", action="store_true",
+                    help="只要原创研究：排除 review/guideline/protocol（unknown 放行）")
+    ap.add_argument("--only-type", dest="only_type", default=None,
+                    metavar="TYPES",
+                    help="只保留指定类型（反向模式），逗号分隔："
+                         "original/review/guideline/protocol，例：--only-type review")
     args = ap.parse_args()
+
+    require_types = None
+    if args.only_type:
+        require_types = tuple(t.strip().lower() for t in args.only_type.split(",") if t.strip())
+        bad = [t for t in require_types if t not in _VALID_TYPES]
+        if bad:
+            ap.error("unknown type(s): %s (valid: %s)" % (bad, ", ".join(_VALID_TYPES)))
 
     data = json.load(open(args.inp, encoding="utf-8"))
     works = data.get("works", [])
     res = screen(works, topic=args.topic, review_type=args.review_type,
-                 safety=args.safety)
+                 safety=args.safety, exclude_non_original=args.exclude_non_original,
+                 require_types=require_types)
 
     data = dict(data)
     data["works"] = res["works"]

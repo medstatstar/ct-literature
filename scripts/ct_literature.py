@@ -38,7 +38,7 @@ import screen_prisma
 import format_citations
 import obsidian_exporter
 import zotero_exporter
-import topic_translator  # 检索词 中文→英文 离线词典翻译
+import topic_translator  # 检索词 中文→英文 翻译（本地词典 + 联网兜底）
 from adapters import verify_citations  # P0: citation identifier verification (anti-hallucination)
 import evidence_log      # P0: provenance audit trail (ct-base §17.1)
 from adapters import fetch_prospero    # P1: PROSPERO systematic-review registry (key-gated, opt-in)
@@ -178,18 +178,21 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         with_prospero=False, prospero_token=None, prospero_header="PROSPERO-ACCESS-TOKEN",
         with_guidelines=False, guideline_sources=None, guideline_max=20,
         verify_mode="all", verify_top_n=15, verify_consistency=True,
+        verify_dois=False,
         out_dir="./out", make_xlsx=True, make_html=True, openalex_key=None,
         citation_style=DEFAULT_CITATION_STYLE, export_bib=DEFAULT_EXPORT_BIB,
         prisma=DEFAULT_PRISMA, rank=DEFAULT_RANK, keywords=None,
         obsidian=False, zotero=False, lang="auto", cochrane=False,
         merge_existing=None, stamp_date=None, preprint_fallback=False,
-        download_pdf=False, include_reviews=True, online=False, offline=False):
+        download_pdf=False, include_reviews=True, online=False, offline=False,
+        original_only=False, only_type=None):
     """merge_existing: path to a PREVIOUS run's .merged.json (or a payload dict /
     list of records). When set, this run's works are unioned with that history and
     every record is stamped first_seen / last_seen (living review / surveillance).
     Read from disk only — no network. Default None => behaviour unchanged.
     download_pdf: 是否在检索完成后进入 PDF 批量下载流程（opt-in）。
-    online: 使用 Coze 端统一检索（6 个文献源走 Coze 服务端），中间调用不记飞书。
+    online: 使用 Coze 端统一检索（6 个文献源走 Coze 服务端），中间调用不记飞书；
+        CLI 层默认 True（--local/--offline 显式回退），函数签名默认 False 保持程序化调用方兼容。
     offline: 强制本地兜底（不调 Coze），与老版本行为完全一致。"""
     os.makedirs(out_dir, exist_ok=True)
     # normalize --keywords (comma-separated string) → list once, so scoring AND all
@@ -200,7 +203,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     # The translated query goes to the APIs; the ORIGINAL topic is preserved for meta /
     # reports / evidence log so the user's wording stays reproducible.
     _topic_zh = topic
-    _tp = topic_translator.translate_topic(topic)
+    # 修复 2026-09-19：run() 作用域无 args（CLI 解析只在 main()），坏引用导致
+    # NameError 崩溃。translate_topic 默认 online_fallback=True，直接用默认值，
+    # 语义与修复前一致（block_a 已前置翻译纯英文，此处原样短路）。
+    _tp = topic_translator.translate_topic(topic, online_fallback=True)
     if _tp["translated"]:
         topic = _tp["topic_en"]
         if _tp["untranslated"]:
@@ -229,7 +235,8 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     # --online 模式：6 个文献源走 Coze 服务端（中间调用 log_feishu=False），
     #   Coze 不可用时自动降级本地 fetch（与老版本行为一致）。
     # --offline 模式：强制本地兜底（不调 Coze）。
-    # 默认（无 --online/--offline）：保持老版本行为（本地 fetch），100% 向后兼容。
+    # 默认（CLI 不带 --local/--offline）：online（Coze 统一检索 + 飞书汇总留痕），
+    #   2026-09-08 起翻转；函数签名默认仍为 online=False（程序化调用方兼容）。
     jobs = []
     if online:
         # Coze 统一检索：6 个文献源走服务端，中间调用不记飞书
@@ -479,7 +486,9 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     if prisma:
         sp = screen_prisma.screen(works, topic=topic, review_type=review_type,
                                   safety=safety,
-                                  duplicates_removed=dedup_stats["duplicates_removed"])
+                                  duplicates_removed=dedup_stats["duplicates_removed"],
+                                  exclude_non_original=original_only,
+                                  require_types=only_type)
         works = sp["works"]
         prisma_block = sp["prisma"]
 
@@ -619,6 +628,24 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
              "intermediate", path=merged_json)
         primary = None
         _ver = {"verified": bool(suffix)}
+        # ---- DOI-focused audit artifact (--verify-dois; additive, network-free here) ----
+        # The doi_* fields are populated by the verification pass above; this only
+        # renders the human-review list. Guarded so a normal run is byte-identical.
+        if verify_dois and run:
+            try:
+                _mis = verify_citations.collect_doi_mismatches(works)
+                _rep = verify_citations.render_doi_mismatch_report(works, topic=_topic_zh)
+                _mp = os.path.join(out_dir, "doi_mismatch%s.md" % suffix)
+                with open(_mp, "w", encoding="utf-8") as _df:
+                    _df.write(_rep)
+                _out("[OK] doi mismatch report (%d flagged) -> %s" % (len(_mis), _mp),
+                     "export_done", kind="doi_mismatch", path=_mp,
+                     count=len(_mis), **_ver)
+                if _mis:
+                    _out("[TIP] DOI 存疑条目已单列，建议人工复核：%s" % _mp, "tip", **_ver)
+            except Exception as _de:
+                _out("[WARN] doi mismatch report failed: %s" % _de,
+                     "export_failed", kind="doi_mismatch", error=str(_de), **_ver)
         if export_bib:
             try:
                 fc = format_citations.export_citations(
@@ -727,6 +754,8 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             _xlsx_out = os.path.join(out_dir, "lit_report.xlsx") if make_xlsx else None
             dl = PdfDownloader(out_dir=pdf_dir, merged_json=merged_json,
                                xlsx_out=_xlsx_out, lang=lang, safety=safety,
+                               citations_out_dir=out_dir,
+                               citation_style=citation_style,
                                progress=lambda m: _out(m, "pdf_download"))
             _out(f"[PDF] 开始批量下载 {len(works)} 篇文献的 PDF：每篇约需 10–20 秒"
                  f"（视网络与限流而定），请耐心等待完成，无需任何操作。")
@@ -772,6 +801,8 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     if online:
         # 最终汇总记一条飞书（log_feishu=True）：统计信息经 querystr 透传，
         # Coze 端飞书节点原样落 querystr 列，供审计追踪整次多源检索的汇总。
+        # 🔴 汇总 payload 只放统计信息，**不携带版本字段**——§2.1（2026-09-17 定）：
+        # skill_version / coze_version 唯一落点是飞书 resultstr，由 Coze 端写入。
         try:
             _summary_payload = {
                 "type": "literature_summary",
@@ -781,13 +812,20 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 "sources_fail": len([p for p in payloads if p and p.get("error")]),
                 "hits_merged": len(works),
             }
+            # mode="log_only"（2026-09-11）：本次调用**只要一条飞书留痕**，不要检索结果。
+            # Coze 端 route_by_mode 据此直连 feishu_write 节点（跳过 search_node），
+            # 因此不再为了一条汇总记录白跑一次真实 openalex 检索（省配额、不污染结果日志）。
+            # log_only 隐含 force_coze=True（在 dispatch 内强制），保证配了 OpenAlex key
+            # 的机器上也不会被「本地直连」早返回吞掉那条例外的留痕。
+            # source/keyword 仅为兼容既有签名，log_only 下不产生任何检索。
             coze_dispatch("openalex", topic, year_from, year_to, max_results,
-                          run=True, log_feishu=True,
+                          run=True, log_feishu=True, force_coze=True, mode="log_only",
                           querystr=json.dumps(_summary_payload, ensure_ascii=False),
-                          skillname="literature")
-            _out("[OK] 飞书汇总已记录 (log_feishu=True)", "feishu_summary")
+                          skillname="ct-literature")
+            # 飞书留痕对用户静默（审计后台可见即可）；仅 json 事件流保留供 agent 诊断
+            _out(None, "feishu_summary")
         except Exception as e:
-            _out(f"[WARN] 飞书汇总记录失败（不影响主流程）: {e}", "feishu_summary_failed", error=str(e))
+            _out(None, "feishu_summary_failed", error=str(e))
 
     _out("[OK] run finished: %s" % primary, "run_done", primary=primary or "")
     return primary
@@ -830,6 +868,15 @@ def main():
                          "Systematic Reviews via a verified journal filter, then keep only "
                          "Cochrane works after merge — a clean Cochrane-only retrieval. "
                          "Pairs with meta-analysis's in-skill dedup probe (same filter string).")
+    # ---- source selection: comma-separated subset that OVERRIDES the --with-* flags ----
+    # 供 meta-analysis A1 选题阶段的「检索数据源」修订直接消费（tool_card params.sources
+    # → --sources）。canonical 名与 fetch_coze_unified._SOURCE_DISPLAY 一致。
+    ap.add_argument("--sources", default=None,
+                    help="comma-separated subset of sources to search; when set it OVERRIDES "
+                         "the individual --with-* defaults (a source is enabled iff listed). "
+                         "Names: OpenAlex, EuropePMC, bioRxiv, medRxiv, SemanticScholar, "
+                         "arXiv, PROSPERO, Guidelines, Cochrane. NOTE: OpenAlex is the "
+                         "pipeline base and is always enabled — it cannot be switched off.")
     # ---- P1: PROSPERO systematic-review registry (opt-in, key-gated, UNVERIFIED) ----
     ap.add_argument("--with-prospero", action="store_true",
                     help="(P1, supplementary) include PROSPERO systematic-review registry "
@@ -898,6 +945,11 @@ def main():
                     help="skip the title/author consistency cross-check (identifier still "
                          "resolved, but not compared against the resolved paper's metadata). "
                          "⚠️ WARNING: weakens the anti-hallucination guarantee; debugging only.")
+    ap.add_argument("--verify-dois", action="store_true",
+                    help="add a DOI-focused audit pass: write doi_verified / doi_mismatch onto "
+                         "each work and emit doi_mismatch.md (a human-review list of DOIs that "
+                         "resolve to a different paper / are malformed). Off by default; needs "
+                         "--run. Standalone equivalent: scripts/verify_dois.py.")
     # ---- F: literature-manager integration ----
     ap.add_argument("--obsidian", action="store_true",
                     help="export Obsidian notes (per-paper .md + MOC index, "
@@ -927,16 +979,65 @@ def main():
                     default=True,
                     help="include review-type publications in results (default: on; "
                          "use --no-include-reviews to exclude at the source and save quota)")
+    ap.add_argument("--original-only", action="store_true",
+                    help="只要原创研究：PRISMA 初筛用 doc-type 甄别排除"
+                         " review/guideline/protocol（标题/摘要级规则）")
+    ap.add_argument("--only-type", dest="only_type", default=None,
+                    metavar="TYPES",
+                    help="只要指定文献类型（反向模式，--original-only 的泛化），"
+                         "逗号分隔：original/review/guideline/protocol。"
+                         "例：--only-type review（只收综述）；"
+                         "--only-type guideline,protocol。注意：无信号记录也会被排除")
     ap.add_argument("--online", action="store_true",
-                    help="(opt-in) 使用 Coze 端统一检索（6 个文献源走 Coze 服务端），"
-                         "中间调用不记飞书、最终汇总记一条；Coze 不可用时自动降级本地 fetch")
+                    help="(默认已开启，保留兼容 no-op) 使用 Coze 端统一检索（6 个文献源走 Coze "
+                         "服务端）；Coze 不可用时自动降级本地 fetch")
+    ap.add_argument("--local", action="store_true",
+                    help="显式本地直连各源公共 API，不经 Coze 端点（即 2026-09-08 之前的默认行为）")
     ap.add_argument("--offline", action="store_true",
-                    help="(opt-in) 强制本地兜底（不调 Coze），与老版本行为完全一致")
+                    help="强制本地兜底（不调 Coze），与老版本行为完全一致；优先级高于 --local")
+    ap.add_argument("--no-online-translate", dest="online_translate", action="store_false",
+                    default=True,
+                    help="关闭联网翻译兜底（默认开启：本地词典 miss 时调 ct-base kw_localize "
+                         "兜底；CT_TRANSLATE_ONLINE=0 也可关闭）")
     ap.add_argument("--progress", default="human", choices=["human", "json"],
                     help="progress output mode: human (readable console, default) or "
                          "json (NDJSON event stream on stdout — run_start / source_done / "
                          "source_failed / fetch_done / verify_done / export_done; for agent use)")
     args = ap.parse_args()
+
+    # ---- --sources: comma-separated subset that OVERRIDES the --with-* / --cochrane flags ----
+    # Consumed by meta-analysis A1 topic-selection revisions (tool_card params.sources →
+    # --sources). A source is enabled iff listed. OpenAlex is the pipeline base and
+    # run() enables it unconditionally, so it can never be switched off (warn if omitted).
+    if args.sources:
+        _ALIAS = {"openalex": "openalex", "europepmc": "europepmc", "pubmed": "europepmc",
+                  "biorxiv": "biorxiv", "medrxiv": "medrxiv",
+                  "semanticscholar": "semantic_scholar", "arxiv": "arxiv",
+                  "prospero": "prospero", "guidelines": "guidelines", "cochrane": "cochrane"}
+        _sel, _unknown = set(), []
+        for _raw in (s for s in args.sources.split(",") if s.strip()):
+            _k = _ALIAS.get(_raw.strip().lower().replace(" ", "").replace("_", "").replace("-", ""))
+            if _k is None:
+                _unknown.append(_raw.strip())
+            else:
+                _sel.add(_k)
+        if _unknown:
+            raise SystemExit(
+                "[ERROR] unknown --sources: %s\n        known: OpenAlex, EuropePMC, "
+                "bioRxiv, medRxiv, SemanticScholar, arXiv, PROSPERO, Guidelines, Cochrane"
+                % ", ".join(_unknown))
+        if "openalex" not in _sel:
+            print("[warn] OpenAlex is the pipeline base and is always enabled; "
+                  "--sources cannot disable it.", file=sys.stderr)
+        args.with_europepmc = "europepmc" in _sel
+        args.with_biorxiv = "biorxiv" in _sel
+        args.with_medrxiv = "medrxiv" in _sel
+        args.with_semantic_scholar = "semantic_scholar" in _sel
+        args.with_arxiv = "arxiv" in _sel
+        args.with_prospero = "prospero" in _sel
+        args.with_guidelines = "guidelines" in _sel
+        args.cochrane = "cochrane" in _sel
+
     global _PROGRESS, _ORIG_STDOUT
     _PROGRESS = args.progress
     if args.progress == "json":
@@ -981,6 +1082,7 @@ def main():
         verify_mode=args.verify,
         verify_top_n=args.verify_top_n,
         verify_consistency=not args.no_consistency,
+        verify_dois=args.verify_dois,
         out_dir=args.out_dir,
         make_xlsx=not args.no_xlsx, make_html=not args.no_html,
         openalex_key=args.openalex_key, citation_style=args.citation_style,
@@ -991,7 +1093,12 @@ def main():
         preprint_fallback=args.preprint_fallback,
         download_pdf=args.download_pdf,
         include_reviews=args.include_reviews,
-        online=args.online, offline=args.offline)
+        original_only=args.original_only,
+        only_type=tuple(t.strip().lower() for t in args.only_type.split(","))
+                  if args.only_type else None,
+        # 默认 online（Coze 统一检索 + 飞书汇总留痕）；--local/--offline 显式回退本地直连。
+        # run() 签名默认值保持不变（程序化调用方零影响），CLI 层翻转默认。
+        online=not (args.local or args.offline), offline=args.offline)
 
 
 if __name__ == "__main__":

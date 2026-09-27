@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-topic_translator.py — 检索词 中文→英文 翻译（离线词典聚合，零外部依赖、零网络）
+topic_translator.py — 检索词 中文→英文 翻译（本地词典聚合 + 联网兜底）
 
 词典来源（全部为 ct- 库共享件 / 本地文件，按优先级合并）：
   1. references/term_map.json         中文医学通用术语 → 英文（~240 条，ct-base 真源同步）
@@ -20,11 +20,13 @@ topic_translator.py — 检索词 中文→英文 翻译（离线词典聚合，
   - 贪心最长匹配（长词优先，避免"肺癌"吃掉"非小细胞肺癌"）
   - 命中条目的多个英文同义词 → query 生成 `(main OR syn1 OR syn2)`（OpenAlex / Europe PMC 均支持布尔 OR）
   - 通用术语（term_map / extra）命中后，若 MeSH entry_terms 有等价同义词 → 追加 OR 扩展（最多 2 个）
-  - 未命中的中文片段保留原样，untranslated 记录（配合运行时 partial 提示）
+  - 未命中的中文片段：调用 ct-base `kw_localize.localize_with_fallback()` 联网兜底
+    （MyMemory 公开端点，无密钥；CT_TRANSLATE_ONLINE=0 或 --no-online-translate 关闭）
+  - 兜底也失败的片段保留原样，untranslated 记录（配合运行时 partial 提示）
 
 输出 dict：
   topic_zh / topic_en / translated / hits[(zh, en_primary), ...] /
-  untranslated[中文残留] / sources[命中的词典来源]
+  untranslated[中文残留] / sources[命中的词典来源（含 "online"）]
 
 用法：
   from topic_translator import translate_topic
@@ -34,12 +36,55 @@ topic_translator.py — 检索词 中文→英文 翻译（离线词典聚合，
 import json
 import os
 import re
+import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REF = os.path.join(_HERE, "..", "references")
 _HAN = re.compile(r"[\u4e00-\u9fff]+")
 
 _CACHE = None
+
+# 联网翻译开关（默认开，与 ct-base 同口径；CT_TRANSLATE_ONLINE=0 关闭）
+_CT_TRANSLATE_ONLINE = os.environ.get("CT_TRANSLATE_ONLINE", "1").strip().lower() \
+    not in ("0", "false", "no", "off")
+
+
+def _import_kw_localize():
+    """懒加载 ct-base 的 kw_localize 模块，找不到时返回 None（联网兜底不可用）。"""
+    # 尝试从 workspace 目录导入（发布包 / 开发环境通用）
+    candidate_dirs = []
+    # 同级目录（开发环境：skills/ct-base/scripts/）
+    candidate_dirs.append(os.path.join(_HERE, "..", "ct-base", "scripts"))
+    # 上级目录（备选）
+    candidate_dirs.append(os.path.join(_HERE, "..", "..", "ct-base", "scripts"))
+    for d in candidate_dirs:
+        if os.path.isfile(os.path.join(d, "kw_localize.py")):
+            if d not in sys.path:
+                sys.path.insert(0, d)
+            try:
+                import importlib
+                return importlib.import_module("kw_localize")
+            except Exception:
+                pass
+    return None
+
+
+def _online_translate_fragment(zh_text):
+    """对单个中文片段调用联网兜底翻译。返回 (en_text, source) 或 (None, None)。"""
+    if not _CT_TRANSLATE_ONLINE or not zh_text:
+        return None, None
+    kw = _import_kw_localize()
+    if kw is None:
+        return None, None
+    try:
+        # kw_localize 只做术语级匹配；整句兜底用 localize_with_fallback（含 MyMemory 端点）
+        en, source = kw.localize_with_fallback(zh_text, "en")
+        if source in ("online", "term_map") and en and not _HAN.search(en):
+            return en, source
+        # source == "miss" 或仍含中文 → 兜底也失败
+        return None, None
+    except Exception:
+        return None, None
 
 
 def _load_json(path):
@@ -156,8 +201,13 @@ def _mesh_syns(mesh, en, limit=2):
     return list(dict.fromkeys(others))[:limit]
 
 
-def translate_topic(topic, mesh_expand=True):
-    """翻译检索词。返回 dict；无中文字符 → 原样返回 translated=False。"""
+def translate_topic(topic, mesh_expand=True, online_fallback=True):
+    """翻译检索词。返回 dict；无中文字符 → 原样返回 translated=False。
+
+    策略：
+      1. 本地词典贪心匹配（长词优先）
+      2. 残留未译片段：联网兜底（ct-base kw_localize，可关闭）
+    """
     topic = (topic or "").strip()
     if not _HAN.search(topic):
         return {"topic_zh": topic, "topic_en": topic, "translated": False,
@@ -189,15 +239,38 @@ def translate_topic(topic, mesh_expand=True):
         query = pattern.sub(_repl, topic)
     else:
         query = topic
-    untranslated = sorted(set(_HAN.findall(query)))
+
+    # 2) 联网兜底：对残留的未翻译片段调用 ct-base kw_localize
+    untranslated = []
+    if online_fallback and _HAN.search(query):
+        def _repl_online(m):
+            zh = m.group(0)
+            en, src = _online_translate_fragment(zh)
+            if en:
+                hits.append((zh, en))
+                if src and src not in hit_sources:
+                    hit_sources.append(src)
+                return en
+            # 兜底也失败 → 保留原样
+            untranslated.append(zh)
+            return zh
+        query = re.sub(r"[\u4e00-\u9fff]+", _repl_online, query)
+    else:
+        untranslated = sorted(set(_HAN.findall(query)))
+
     return {"topic_zh": topic, "topic_en": query, "translated": True,
             "hits": hits, "untranslated": untranslated, "sources": hit_sources}
 
 
 if __name__ == "__main__":
     import sys
-    for t in sys.argv[1:] or ["奥希替尼 间质性肺病", "泰瑞沙 肺癌 一线治疗",
-                              "肺癌 免疫治疗 不良反应", "osimertinib interstitial lung disease"]:
+    # 解析 --no-online-translate（与 ct-base 同口径）
+    args = sys.argv[1:]
+    if "--no-online-translate" in args:
+        _CT_TRANSLATE_ONLINE = False
+        args.remove("--no-online-translate")
+    for t in args or ["奥希替尼 间质性肺病", "泰瑞沙 肺癌 一线治疗",
+                       "肺癌 免疫治疗 不良反应", "osimertinib interstitial lung disease"]:
         r = translate_topic(t)
         print("IN :", r["topic_zh"])
         print("OUT:", r["topic_en"], "| translated:", r["translated"])

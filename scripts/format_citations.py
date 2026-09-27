@@ -130,6 +130,19 @@ def _gb_authors(authors):
     return "，".join(out)
 
 
+def _local_pdf_label(work):
+    """Return the absolute local-PDF path string, or "" if none.
+
+    文件实际落盘在本地（out_dir/pdfs 下），因此题录数据直接写**绝对路径**，
+    便于用户复制到资源管理器 / 文献管理器直接定位，而不是只剩一个无上下文的文件名。
+    （历史上曾写 os.path.basename，用户 2026-09-21 明确改为绝对路径。）
+    """
+    p = work.get("local_pdf_path") or ""
+    if not p:
+        return ""
+    return os.path.normpath(os.path.abspath(str(p)))
+
+
 def cite(work, style):
     authors = _authors_list(work)
     year = work.get("year") or "n.d."
@@ -141,6 +154,7 @@ def cite(work, style):
     doi = work.get("doi") or ""
     bare_doi = _bare_doi(doi)
     url = work.get("url") or (("https://doi.org/" + bare_doi) if bare_doi else "")
+    pdf_fn = _local_pdf_label(work)
 
     if style == "apa":
         a = _apa_authors(authors)
@@ -156,11 +170,12 @@ def cite(work, style):
             s += "."
         if doi:
             s += " https://doi.org/%s" % bare_doi
+        if pdf_fn:
+            s += " [本地PDF: %s]" % pdf_fn
         return s.strip()
 
     if style == "nature":
         a = _nat_ieee_authors(authors)
-        # Nature uses numbered style but here we render the inline form:
         s = "%s. %s. " % (a, title) if a else "%s. " % title
         if journal:
             s += "%s " % journal
@@ -173,6 +188,8 @@ def cite(work, style):
             s += "(%s)." % year
         if doi:
             s += " https://doi.org/%s" % bare_doi
+        if pdf_fn:
+            s += " [本地PDF: %s]" % pdf_fn
         return s.strip()
 
     if style == "vancouver":
@@ -190,6 +207,8 @@ def cite(work, style):
             s += "."
         if doi:
             s += " doi:%s" % bare_doi
+        if pdf_fn:
+            s += " [本地PDF: %s]" % pdf_fn
         return s.strip()
 
     if style == "ieee":
@@ -209,6 +228,8 @@ def cite(work, style):
             s += "%s." % year
         if doi:
             s += " doi: %s." % bare_doi
+        if pdf_fn:
+            s += " [本地PDF: %s]" % pdf_fn
         return s.strip()
 
     if style == "gb7714":
@@ -227,6 +248,8 @@ def cite(work, style):
             s += "."
         if doi:
             s += " DOI:%s." % bare_doi
+        if pdf_fn:
+            s += " [本地PDF: %s]" % pdf_fn
         return s.strip()
 
     # fallback to apa
@@ -280,6 +303,9 @@ def to_bibtex(works):
             lines.append("  doi = {%s}," % _bare_doi(w["doi"]))
         if w.get("url"):
             lines.append("  url = {%s}," % w["url"])
+        pdf_fn = _local_pdf_label(w)
+        if pdf_fn:
+            lines.append("  note = {本地PDF: %s}," % pdf_fn)
         lines.append("}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks) + ("\n" if blocks else "")
@@ -313,6 +339,9 @@ def to_ris(works):
             lines.append("DO  - %s" % _bare_doi(w["doi"]))
         if w.get("url"):
             lines.append("UR  - %s" % w["url"])
+        pdf_fn = _local_pdf_label(w)
+        if pdf_fn:
+            lines.append("L1  - %s" % pdf_fn)
         lines.append("ER  - ")
         blocks.append("\n".join(lines))
     return "\n".join(blocks) + ("\n" if blocks else "")

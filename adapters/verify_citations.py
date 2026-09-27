@@ -375,10 +375,10 @@ def verify_one(work, timeout=15, skip_sources=None, check_consistency=True):
 
     # malformed DOI => suspicious (possible hallucinated identifier)
     if doi and not _DOI_RE.search(str(doi)):
-        return {"citation_verified": False,
+        return _with_doi_flags({"citation_verified": False,
                 "citation_verify_status": "suspicious",
                 "citation_verify_note": "malformed DOI: %s" % doi,
-                "citation_consistency": False, "citation_title_ratio": None}
+                "citation_consistency": False, "citation_title_ratio": None}, doi)
 
     # DOI first (canonical cross-source id). ok / bot_blocked both mean the DOI is
     # REAL; either way we can still pull Crossref metadata for the consistency check
@@ -387,8 +387,9 @@ def verify_one(work, timeout=15, skip_sources=None, check_consistency=True):
         st = _resolve_doi(doi, timeout)
         if st in ("ok", "bot_blocked"):
             meta = _fetch_meta_doi(doi, timeout)
-            return _emit(work, "doi", "verified" if st == "ok" else "bot_blocked",
-                         meta, check_consistency)
+            return _with_doi_flags(
+                _emit(work, "doi", "verified" if st == "ok" else "bot_blocked",
+                      meta, check_consistency), doi)
 
     # PMID + OpenAlex id: reliable, bot-friendly API lookups. Always attempt when
     # the DOI did NOT positively verify — the fallback that keeps real papers from
@@ -417,6 +418,34 @@ def verify_one(work, timeout=15, skip_sources=None, check_consistency=True):
     return {"citation_verified": False, "citation_verify_status": "unresolved",
             "citation_verify_note": "; ".join(notes) or "could not verify",
             "citation_consistency": None, "citation_title_ratio": None}
+
+
+def verify_doi_only(work, timeout=15):
+    """DOI-scoped verification (used by scripts/verify_dois.py, `--verify-dois`).
+
+    Resolves the DOI and Crossref-checks title + first-author surname, returning the
+    additive ``doi_*`` fields. Unlike ``verify_one`` it NEVER falls back to the
+    PMID / OpenAlex path — a work without a resolvable DOI is reported as such, which
+    is exactly what a DOI-focused audit wants. Network runs only when called.
+    """
+    doi = work.get("doi")
+    if not doi:
+        return {"doi": None, "doi_checked": False, "doi_verified": False,
+                "doi_mismatch": False, "doi_mismatch_note": "no DOI on this work"}
+    if not _DOI_RE.search(str(doi)):
+        return _with_doi_flags({"citation_verified": False,
+                "citation_verify_status": "suspicious",
+                "citation_verify_note": "malformed DOI: %s" % doi,
+                "citation_consistency": False, "citation_title_ratio": None}, doi)
+    st = _resolve_doi(doi, timeout)
+    if st not in ("ok", "bot_blocked"):
+        return _with_doi_flags({"citation_verified": False,
+                "citation_verify_status": "unresolved",
+                "citation_verify_note": "DOI did not resolve to a live resource",
+                "citation_consistency": None, "citation_title_ratio": None}, doi)
+    meta = _fetch_meta_doi(doi, timeout)
+    return _with_doi_flags(
+        _emit(work, "doi", "verified" if st == "ok" else "bot_blocked", meta, True), doi)
 
 
 def work_key(work):
@@ -456,6 +485,78 @@ def summarize_results(results_map):
         st = r.get("citation_verify_status", "unresolved")
         s[st] = s.get(st, 0) + 1
     return s
+
+
+def _with_doi_flags(res, doi):
+    """Add DOI-specific additive fields on top of a citation-verify result.
+
+    Consumed by the DOI-focused report (`scripts/verify_dois.py` + `--verify-dois`).
+    Purely additive — older consumers ignore these keys. ``doi_verified`` answers
+    "does this DOI resolve AND match the paper we hold?"; ``doi_mismatch`` isolates
+    the real-but-wrong / hallucinated-DOI case (the error the ct-literature error
+    table calls "DOI dedupe merged too aggressively / shared DOI typo").
+    """
+    st = res.get("citation_verify_status")
+    res = dict(res)
+    res["doi"] = (str(doi).strip() if doi else None)
+    res["doi_checked"] = True
+    res["doi_verified"] = bool(res.get("citation_verified"))
+    res["doi_mismatch"] = (st == "mismatch")
+    if st == "mismatch":
+        res["doi_mismatch_note"] = ("DOI resolves to a DIFFERENT paper "
+                                    "(title/author mismatch) — human review advised")
+    elif st == "suspicious":
+        res["doi_mismatch_note"] = "malformed DOI — human review advised"
+    elif st == "bot_blocked":
+        res["doi_mismatch_note"] = ("publisher bot-blocked the DOI; "
+                                    "existence confirmed via redirect")
+    else:
+        res["doi_mismatch_note"] = ""
+    return res
+
+
+def collect_doi_mismatches(works):
+    """Return the works whose DOI resolves to a different paper (or is malformed).
+
+    Reads the additive ``doi_mismatch`` field when present, else falls back to the
+    generic ``citation_verify_status == 'mismatch'`` / ``'suspicious'`` signal so a
+    report can be produced even from an older verification pass.
+    """
+    out = []
+    for w in works or []:
+        flag = w.get("doi_mismatch")
+        st = w.get("citation_verify_status")
+        if flag is None:
+            flag = st in ("mismatch", "suspicious")
+        if flag:
+            out.append(w)
+    return out
+
+
+def render_doi_mismatch_report(works, topic=None):
+    """Build a Markdown report highlighting DOI mismatches (human review list)."""
+    mis = collect_doi_mismatches(works)
+    total_doi = sum(1 for w in (works or []) if w.get("doi"))
+    lines = ["# DOI verification report · 引文 DOI 校验报告", ""]
+    if topic:
+        lines.append("- **topic**: %s" % topic)
+    lines.append("- **works with a DOI**: %d" % total_doi)
+    lines.append("- **DOI mismatches / malformed (needs human review)**: %d" % len(mis))
+    lines.append("")
+    if not mis:
+        lines.append("✅ 未发现 DOI 与文献标题/作者不一致的情况。")
+        return "\n".join(lines) + "\n"
+    lines.append("| # | DOI | 标题（截断） | 状态 | 说明 |")
+    lines.append("|---|---|---|---|---|")
+    for i, w in enumerate(mis, 1):
+        title = str(w.get("title") or "").replace("|", "/")[:70]
+        note = str(w.get("doi_mismatch_note") or w.get("citation_verify_note") or "").replace("|", "/")[:90]
+        lines.append("| %d | %s | %s | ⚠️ %s | %s |"
+                     % (i, w.get("doi") or "—", title,
+                        w.get("citation_verify_status") or "mismatch", note))
+    lines.append("")
+    lines.append("> ⚠️ 以上条目建议人工复核：DOI 可能指向另一篇文献或存在笔误。")
+    return "\n".join(lines) + "\n"
 
 
 def attach_verifications(works, results_map):

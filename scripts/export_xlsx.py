@@ -107,6 +107,9 @@ _LOCAL = {
     "col.is_safety":   {"en": "Safety", "zh": "安全性"},
     "col.decision":    {"en": "Decision", "zh": "裁决"},
     "col.reason":      {"en": "Reason", "zh": "理由"},
+    # 附加决策列（decision_extra）：人工确认的文献类型，下游只读不再判定。
+    # 与 col.type（元数据原始类型，只读）分列，避免"确认值"与"库方标注"混为一谈。
+    "col.doc_type_confirmed": {"en": "Confirmed type", "zh": "文献类型确认"},
     "col.oa":          {"en": "OA link", "zh": "OA链接"},
     "col.abstract":    {"en": "Abstract", "zh": "摘要"},
     "col.pdf_path":    {"en": "PDF Path", "zh": "PDF 本地路径"},
@@ -435,6 +438,12 @@ _WORKS_COLS = [("type", "col.type", 12),
                ("study_type", "col.study_type", 18),
                ("year", "col.year", 7),
                ("publication", "col.publication", 22),
+               # DOI 是记录的第一标识列，必须落表（2026-09-10 补）：
+               # 裁决表回传按 DOI 匹配远比标题稳健——人工在 Excel 里改一个标点、
+               # 多一个换行，归一化标题就不再相交，匹配会静默降为 0 且不报错。
+               # 纯文本写入（不加超链接）：① 便于人工复制/核对；② 回传端按文本读，
+               # 不受超链接结构影响。标题单元格仍有 doi.org 超链可点。
+               ("doi", "col.doi", 30),
                ("authors", "col.authors", 30),
                ("title", "col.title", 50),
                ("abstract_snippet", "col.abstract", 62),
@@ -462,36 +471,54 @@ def _norm_title(title):
     return " ".join(str(title).strip().lower().split())
 
 
-def _build_decision_map(decisions):
-    """把 [{doi,title,decision,reason}, ...] 建成 {匹配键: (decision, reason)}。
+def _col_label(hkey):
+    """列头标签解析：i18n key（"col.*"）经 t() 本地化；其余按字面量原样输出。
+
+    让调用方（如 meta-analysis）可以自带列名而不必改共享模块的 i18n 表。
+    """
+    if isinstance(hkey, str) and hkey.startswith("col."):
+        return t(hkey)
+    return hkey
+
+
+def _build_decision_map(decisions, extra_keys=()):
+    """把 [{doi,title,decision,reason,...}, ...] 建成 {匹配键: 行记录}。
 
     匹配键优先 DOI（更稳），DOI 缺失/重复时回退归一化标题。
-    返回 dict：键为 _norm_doi 或 _norm_title 的结果。
+    extra_keys：随裁决一并携带的附加列键（如 "doc_type"），值原样透传。
+    返回 dict：键为 _norm_doi 或 _norm_title 的结果，值为 {
+        "decision":…, "reason":…, <extra_key>:… }。
     """
     mp = {}
     if not decisions:
         return mp
+    extra_keys = tuple(extra_keys or ())
     for d in decisions:
         if not isinstance(d, dict):
             continue
-        dec = d.get("decision")
-        reason = d.get("reason") or ""
+        rec = {"decision": d.get("decision"), "reason": d.get("reason") or ""}
+        for k in extra_keys:
+            rec[k] = d.get(k)
         key = _norm_doi(d.get("doi")) or _norm_title(d.get("title"))
         if key:
-            mp[key] = (dec, reason)
+            mp[key] = rec
     return mp
 
 
 def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=None,
-                       decision_options=None):
+                       decision_options=None, decision_extra=None):
     cols = _WORKS_COLS
     has_dec = bool(decision_map)
     # 决策列（可选）：仅在传入 decisions 时出现，避免影响普通检索导出
     extra = [("decision", "col.decision", 12), ("reason", "col.reason", 40)] if has_dec else []
+    # 附加列（可选）：附加决策列，仅在同时存在决策列时有意义（值随裁决行携带）
+    if has_dec:
+        extra += [(s["key"], s.get("label") or s["key"], s.get("width", 16))
+                  for s in (decision_extra or []) if isinstance(s, dict) and s.get("key")]
     all_cols = cols + extra
     ws.set_row(start_row, HEADER_H)
     for ci, (_, hkey, _) in enumerate(all_cols):
-        ws.write(start_row, ci, t(hkey), fmts["header"])
+        ws.write(start_row, ci, _col_label(hkey), fmts["header"])
     for ri, w in enumerate(works, start=start_row + 1):
         zebra = ((ri - start_row - 1) % 2 == 1)
         base = fmts["zebra"] if zebra else fmts["plain"]
@@ -552,11 +579,10 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=Non
                 # 按医学摘要段首标签恢复分段（源为单段文本）
                 ws.write(ri, ci, restore_abstract_paragraphs(v or ""), row_fmt)
             elif key == "local_pdf_path":
-                # PDF 本地路径：下载成功 → 纯文本完整绝对路径（os.path.normpath 统一
-                # Windows 反斜杠；不加 file:// 超链 —— xlsxwriter 会把 file URL 转回
-                # 反斜杠存储、预览面板又会把它当网络链接渲染成 https/file，纯文本
-                # 路径最稳妥，可复制到资源管理器直接打开）。
-                # 失败/无 OA 直链 → 统一显示「失败」。
+                # PDF 本地路径：本地脚本产物（pipeline / PdfDownloader / update_xlsx_pdf_paths），
+                # 由用户在本地打开 → 必须写**绝对路径**，便于复制到资源管理器直接定位。
+                # 网页端不渲染该列（网页只提供下载，不存在本地路径概念）；若要在网页里展示，
+                # 由前端自行取 os.path.basename。
                 from pathlib import Path
                 if v and Path(str(v)).is_file():
                     ws.write(ri, ci, os.path.normpath(str(v)), row_fmt)
@@ -569,12 +595,16 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=Non
             else:
                 ws.write(ri, ci, v, row_fmt)
         if has_dec:
-            # 按 DOI（优先）/ 标题匹配本行对应的裁决/理由
+            # 按 DOI（优先）/ 标题匹配本行对应的裁决/理由（+ 附加列）
             key = _norm_doi(w.get("doi")) or _norm_title(w.get("title"))
-            dec, reason = decision_map.get(key, (None, ""))
+            rec = decision_map.get(key) or {}
             ci0 = len(cols)
-            ws.write(ri, ci0, dec or "", base)
-            ws.write(ri, ci0 + 1, reason or "", base)
+            ws.write(ri, ci0, rec.get("decision") or "", base)
+            ws.write(ri, ci0 + 1, rec.get("reason") or "", base)
+            for j, spec in enumerate(decision_extra or [], start=2):
+                if not isinstance(spec, dict) or not spec.get("key"):
+                    continue
+                ws.write(ri, ci0 + j, rec.get(spec["key"]) or "", base)
         # 行高自适应：按摘要（主）与标题（次）的估算折行数设置行高，默认展开约 5 行
         # —— 摘要文本始终完整写入（text_wrap），更长内容在 Excel 中双击该行头
         # 下边界（自动适应行高）或手动拖高即可查看全文，避免每行撑满半屏。
@@ -601,19 +631,39 @@ def _write_works_table(ws, works, fmts, safety_hl, start_row=0, decision_map=Non
             "error_title": "裁决取值",
             "error_message": "请从下拉选择：纳入 / 排除 / 低置信",
         })
+    # 附加列下拉：由调用方给选项（如「文献类型确认」的原始/综述/指南/方案），
+    # 保证人工只能选合法值，回传端无需猜写错的形式。
+    if has_dec and works:
+        for j, spec in enumerate(decision_extra or [], start=2):
+            if not isinstance(spec, dict) or not spec.get("options"):
+                continue
+            col = len(cols) + j
+            ws.data_validation(start_row + 1, col, start_row + len(works), col, {
+                "validate": "list",
+                "source": list(spec["options"]),
+                "ignore_blank": True,
+                "show_error": True,
+                "error_title": (spec.get("label") or spec["key"]),
+                "error_message": spec.get("error_message") or "请从下拉选择",
+            })
     return len(works)
 
 
-def build_works(wb, data, fmts, safety_hl, decisions=None, decision_options=None):
+def build_works(wb, data, fmts, safety_hl, decisions=None, decision_options=None,
+                decision_extra=None):
     ws = wb.add_worksheet(t("sheet.works"))
     _page_decor(ws, t("sheet.works"), fmts)
     ws.set_tab_color(BLUE)
     works = data.get("works") or []
-    dmap = _build_decision_map(decisions) if decisions else None
+    extra_specs = [s for s in (decision_extra or [])
+                   if isinstance(s, dict) and s.get("key")]
+    dmap = (_build_decision_map(decisions, [s["key"] for s in extra_specs])
+            if decisions else None)
     n = _write_works_table(ws, works, fmts, safety_hl, decision_map=dmap,
-                           decision_options=decision_options)
+                           decision_options=decision_options,
+                           decision_extra=extra_specs)
     ws.freeze_panes(1, 0)
-    ncols = len(_WORKS_COLS) + (2 if dmap else 0)
+    ncols = len(_WORKS_COLS) + (2 if dmap else 0) + (len(extra_specs) if dmap else 0)
     if works:
         ws.autofilter(0, 0, n, ncols - 1)
     for ci, (_, _, w) in enumerate(_WORKS_COLS):
@@ -621,6 +671,9 @@ def build_works(wb, data, fmts, safety_hl, decisions=None, decision_options=None
     if dmap:
         ws.set_column(len(_WORKS_COLS), len(_WORKS_COLS), 12)       # 裁决
         ws.set_column(len(_WORKS_COLS) + 1, len(_WORKS_COLS) + 1, 40)  # 理由
+        for j, spec in enumerate(extra_specs, start=2):
+            c = len(_WORKS_COLS) + j
+            ws.set_column(c, c, spec.get("width", 16))
     return ws
 
 
@@ -960,7 +1013,7 @@ def sanitize(data):
 
 
 def export_workbook(data, out_path, lang="auto", safety=False, decisions=None,
-                    decision_options=None):
+                    decision_options=None, decision_extra=None):
     data = sanitize(data)
     # Promote provenance / verification blocks from `meta` when the caller passed
     # them nested (the pipeline passes {count, works, meta}); the standalone CLI
@@ -998,7 +1051,7 @@ def export_workbook(data, out_path, lang="auto", safety=False, decisions=None,
     build_readme(wb, data, fmts)
     build_overview(wb, data, fmts)
     build_works(wb, data, fmts, fmts["safety_hl"], decisions=decisions,
-                decision_options=decision_options)
+                decision_options=decision_options, decision_extra=decision_extra)
     # Safety-Related sheet is opt-in: only when --safety (CSM subset) is requested.
     # A plain literature search keeps the workbook to 3 sheets (README / Overview /
     # Works / Evidence Log) — the safety subset is NOT a default deliverable.

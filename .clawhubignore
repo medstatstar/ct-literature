@@ -66,6 +66,12 @@ pdfs/
 # ClawHub 按目录打包不认 git 跟踪，仅排 *.html 会把内部资产带进发布包
 workbench/
 
+# ── 发布辅助件统一收纳目录（2026-09-16）──
+# `workbench/publish-kit/` 放 appId 归属标记、安装器、载荷构建脚本，属「发布基础设施」。
+# 它已被上面的 `workbench/` 整目录规则覆盖；此条是**独立护栏** —— 万一将来工作台被纳入
+# 发布（该排除注释写的是"暂不发布"），这些文件也不会跟着出去。
+workbench/publish-kit/
+
 # ── 补齐双份 ignore 差异项（2026-08-29）──
 *.py[cod]
 *.swp
@@ -78,3 +84,5 @@ Thumbs.db
 # ── 运行态配置 / 检索产物（2026-09-06 起移出技能树，置 ~/.workbuddy/ct-literature-runtime/）──
 config/
 out_dm_sglt2_v9/
+
+lit/

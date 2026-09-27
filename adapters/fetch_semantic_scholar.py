@@ -13,6 +13,7 @@ source is SKIPPED entirely (no network request) rather than attempting-and-degra
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.parse
@@ -134,6 +135,10 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
             "publication": d.get("venue"),
             "journal_iso": d.get("venue"),
             "type": "article",
+            # pub_types: S2 publicationTypes 原样透传（CamelCase，如 "Review" /
+            # "JournalArticle"），供 doc_type_filter 的 pubType 强通道使用——
+            # 2026-09-09 起 doc-type 甄别依赖该字段（此前请求了字段但未落地）。
+            "pub_types": [_camel_to_words(t) for t in (d.get("publicationTypes") or [])],
             "study_type": _study_type_from(title, abstract),
             "cited_by_count": d.get("citationCount") or 0,
             "url": ext.get("DOI") or ("https://www.semanticscholar.org/paper/%s" % d.get("paperId") if d.get("paperId") else None),
@@ -157,6 +162,16 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
             json.dump(payload, f, ensure_ascii=False, indent=2)
         print("[OK] Semantic Scholar wrote %d works -> %s" % (len(collected), out))
     return payload
+
+
+def _camel_to_words(s):
+    """S2 类型标签 CamelCase → 分词（"JournalArticle"→"Journal Article"）。
+
+    使 doc_type_filter._PUBTYPE_MAP 的空格形态正则（journal article /
+    systematic review / clinical trial）能命中；纯小写/含空格标签原样返回。
+    """
+    s = str(s or "")
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", s).strip()
 
 
 def _empty(topic):

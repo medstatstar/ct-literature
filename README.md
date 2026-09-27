@@ -6,6 +6,8 @@
 <img src="assets/icon.svg" width="240" height="240" alt="ct-literature logo"/>
 </div>
 
+> **No install needed to try it:** if you don't want to install this skill and just want to quickly use its basic features, visit the web app directly at **https://ct.medstatstar.com**.
+
 > **A `ct-` library skill (A-tier public-intel — non-confidential input) that retrieves published scholarly literature about a drug / disease / method, normalizes multiple public bibliographic sources into one de-duplicated evidence base, and surfaces the evidence landscape plus a CSM (cumulative safety monitoring) qualitative subset.**
 
 > No commands or manual needed. Just describe your literature question **in plain language inside a chat** — the skill fetches from **OpenAlex (primary) + Europe PMC (on by default) + bioRxiv/medRxiv (on by default)**, then writes a self-contained **HTML + Excel** report. (Semantic Scholar and arXiv are opt-in via flags, not part of the default pipeline.) A-tier (non-confidential input): fully local computation, only public retrieval. **Note: your topic query is sent to the public bibliographic APIs below — see the [outbound notice](#outbound--privacy).** The skill activates **only when you explicitly ask for a literature search**; it never retrieves on its own during unrelated conversations.

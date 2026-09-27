@@ -18,6 +18,9 @@
   - locale（§1.1）：界面 / 输出语言（zh/en），顶层信封输出开关
   - params.user_language（§1.1）：输入语言提示，规范承载位是请求 params（顶层不双写）
   - coze 端据此把 runtime_sec（处理持续秒数，§2.2）写入飞书 resultstr 列（只进日志不出参）
+  - 🔴 版本字段落点（§2.1，2026-09-17 定）：skill_version（本端顶层信封）+ coze_version
+    （端点常量）一律由 **coze 端写飞书 resultstr**；本端**不得**把版本号塞进 `querystr`，
+    也不用新增列——改端点一处即可，客户端无需改动。
 
 单批上限（用户 2026-09-05 指定）：coze 端 MAX_BATCH_ITEMS=50，超限直接 rejected；
 本地按同一上限自动拆批，每批一次传送。
@@ -39,6 +42,7 @@ project_list 字符串/字典、超长回参外置 S3 三种形态）。
   5. 整批 coze 失败 → 该批走本地兜底解码（仅 epmc 副本可下）
 """
 
+import difflib
 import hashlib
 import json
 import os
@@ -191,7 +195,8 @@ def _resolve_user_language() -> str:
 PDF_DOWNLOAD_NOTICE = (
     "【下载说明】本功能仅为方便快速获取文档：① 仅下载无版权问题的 OA 文献，付费文献请自行下载；"
     "② 请勿用于超过 50 篇的批量下载或商业用途，否则可能导致服务被封锁 IP；"
-    "③ OA 供应商普遍拦截代码自动下载，因此可能失败，成功率约 30–50%；"
+    "③ OA 供应商普遍拦截代码自动下载；本地下载采用「Europe PMC 渲染 + OpenAlex + Unpaywall + 出版商直链」"
+    "多级回退，OA/预印本类成功率通常 85–95%，订阅刊无 OA 副本时仍会失败，需自行下载；"
     "④ 对无法直接下载的文献，系统会自动尝试公开提供的作者手稿或其它预印本渠道作为替代；"
     "⑤ 每篇下载约需 10–20 秒（含限流退避与云端解析），整批下载请耐心等待。"
 )
@@ -230,6 +235,94 @@ def _looks_like_pdf_url(u: str) -> bool:
     """宽松判定：是否为 PDF 下载地址（用于本地预筛返回的候选直链）。"""
     u = (u or "").strip().lower()
     return bool(u) and (u.endswith(".pdf") or "pdf" in u)
+
+
+# 出版商 WAF 域名：直链几乎必然对自动化返回 403；本地优先改用
+# Europe PMC 渲染通道 / OpenAlex 机构库镜像 / 作者手稿，而非硬刚直链。
+# （2026-09-08 实战：Elsevier/Wiley/Lancet 直链 100% 被拦，渲染通道与机构库镜像才拿得到。）
+_WAF_HOSTS = (
+    "elsevier.com", "sciencedirect.com", "wiley.com", "onlinelibrary.wiley.com",
+    "springer.com", "link.springer.com", "springerpub.com", "tandfonline.com",
+    "taylorfrancis", "sagepub.com", "nature.com", "wolterskluwer", "lww.com",
+    "acs.org", "pubs.acs.org", "bmj.com", "liebertpub.com", "karger.com",
+    "frontiersin.org", "thelancet.com", "cell.com", "nejm.org", "oup.com",
+)
+
+
+def _is_waf_host(url: str) -> bool:
+    u = (url or "").strip().lower()
+    return any(h in u for h in _WAF_HOSTS)
+
+
+def _http_json(url: str, timeout: int = 25) -> Optional[dict]:
+    """简单 JSON GET（精简头，不请求压缩），失败返回 None。
+
+    供 Crossref / OpenAlex / Europe PMC 复用。注意：必须显式 Accept-Encoding: identity——
+    urllib 标准库不自动解 gzip/br，若带 `Accept-Encoding: gzip` 服务端回压缩字节，
+    json.loads 会直接失败（2026-09-08 实测坑：Crossref/OpenAlex 解析全挂、Europe PMC
+    因用 plain UA 才正常）。
+    """
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "ct-literature-skill/1.0",
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _sim(a: str, b: str) -> float:
+    """标题相似度（0–1），difflib ratio。用于 Crossref 命中判定。"""
+    a, b = (a or "").lower().strip(), (b or "").lower().strip()
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _year_from_date(s) -> Optional[int]:
+    if not s:
+        return None
+    m = re.search(r"(\d{4})", str(s))
+    return int(m.group(1)) if m else None
+
+
+def _resolve_doi_from_title(title: str, year=None) -> Tuple[str, float]:
+    """Crossref 按标题解析 DOI（query.bibliographic + 相似度/年份加权）。
+
+    返回 (doi, score)；score<0.5 视为未命中返回 ("", 0.0)。用于「仅有标题、无 DOI」
+    的重下载 / 补下载场景（如 Excel 行有标题但 DOI 字段缺失）。
+    """
+    if not title:
+        return "", 0.0
+    # 标题过短/通用（<55 字符）直接不解析：Crossref 里常有逐字同名的多篇论文，
+    # 从短标题无法消歧，错下论文比下不到更糟（anti-hallucination）。长且具体的标题才解析。
+    if len(title.strip()) < 55:
+        return "", 0.0
+    q = urllib.parse.quote(title[:250])
+    api = ("https://api.crossref.org/works?query.bibliographic=%s&rows=5"
+           "&select=DOI,title,container-title,published" % q)
+    d = _http_json(api)
+    if not d:
+        return "", 0.0
+    best, best_score = "", 0.0
+    for it in (d.get("message") or {}).get("items", []):
+        doi = it.get("DOI") or ""
+        t = (it.get("title") or [""])[0]
+        yr = None
+        parts = (it.get("published") or {}).get("date-parts") or [[None]]
+        if parts and parts[0]:
+            yr = parts[0][0]
+        s = _sim(t, title)
+        if year and yr and abs(int(yr) - int(year)) > 1:
+            s -= 0.25
+        if s > best_score:
+            best, best_score = doi, s
+    # 阈值 0.9：只接受近逐字匹配。正确论文在 Crossref 中标题通常逐字一致(sim≈1.0)，
+    # 通用/同名标题易撞车(sim<0.9)——错下论文比下不到更糟（anti-hallucination）。
+    return (best if best_score >= 0.9 else ""), round(best_score, 2)
 
 
 class _PerHostRateLimiter:
@@ -345,7 +438,7 @@ def _download_to(url: str, out_path: str, timeout: int = 120) -> bool:
                     if not chunk:
                         break
                     f.write(chunk)
-            if os.path.getsize(tmp_path) > 100:
+            if os.path.getsize(tmp_path) > 5000:
                 # 校验通过 → 原子覆盖到最终路径（os.replace 非删除，不触发钩子）
                 os.replace(tmp_path, out_path)
                 return True
@@ -420,6 +513,48 @@ def _parse_coze_stream(resp, log_fn) -> Optional[List[Dict[str, Any]]]:
     """
     events: List[dict] = []
     buf = b""
+    _t0 = time.time()          # 本次流开始时间（用于进度日志中的"已用时"）
+    _hb = [0.0]                # 上次心跳 log 时间（列表以便闭包内改写）
+
+    def _log_evt(evt) -> bool:
+        """SSE 事件到达即记录（实时进度）。返回 False = 致命 error，需中止。"""
+        if not isinstance(evt, dict):
+            return True
+        etype = evt.get("type")
+        inner = evt.get("data")
+        if isinstance(inner, dict) and inner.get("type"):
+            etype = inner.get("type")
+            node = inner
+        else:
+            node = evt
+        _el = time.time() - _t0
+        if etype == "workflow_start":
+            log_fn("[coze:workflow_start] 工作流已启动（已用时 %.0fs）" % _el)
+        elif etype == "node_start":
+            nt = node.get("node_title") or node.get("title") or node.get("node_id") or ""
+            log_fn("[coze:node_start] %s（已用时 %.0fs）" % (nt, _el))
+        elif etype == "node_end":
+            nt = node.get("node_title") or node.get("node_id") or ""
+            o = _dig_output(node)
+            if o is not None and nt:
+                try:
+                    sz = len(json.dumps(o, ensure_ascii=False))
+                except Exception:
+                    sz = 0
+                log_fn("[coze:node_end] %s -> %d 字节输出（已用时 %.0fs）" % (nt, sz, _el))
+        elif etype == "workflow_end":
+            log_fn("[coze:workflow_end] 工作流结束（总计 %.0fs）" % _el)
+        elif etype == "ping":
+            # 端点保活心跳：静默期也每 20s 上报一次，避免界面"假死"
+            if _el - _hb[0] >= 20:
+                _hb[0] = _el
+                log_fn("[coze] 端点保活中，解码进行…已用时 %.0fs" % _el)
+        elif etype == "error":
+            log_fn("[coze] 流式返回 error: %s"
+                   % json.dumps(evt.get("data") or evt, ensure_ascii=False)[:400])
+            return False
+        return True
+
     for chunk in resp:
         buf += chunk
         while b"\n" in buf:
@@ -429,9 +564,12 @@ def _parse_coze_stream(resp, log_fn) -> Optional[List[Dict[str, Any]]]:
                 ds = line[len("data:"):].lstrip()
                 if ds and ds != "[DONE]":
                     try:
-                        events.append(json.loads(ds))
+                        evt = json.loads(ds)
                     except Exception:
-                        pass
+                        continue
+                    events.append(evt)
+                    if not _log_evt(evt):   # 边到边报：进度实时可见
+                        return None
     # 兜底：未解析到事件则尝试整块 JSON（应对非 SSE 返回）
     if not events:
         try:
@@ -452,30 +590,14 @@ def _parse_coze_stream(resp, log_fn) -> Optional[List[Dict[str, Any]]]:
             node = inner
         else:
             node = evt
-        if etype == "workflow_start":
-            log_fn("[coze:workflow_start] 工作流开始")
-        elif etype == "node_start":
-            nt = node.get("node_title") or node.get("title") or node.get("node_id") or ""
-            log_fn("[coze:node_start] %s" % nt)
-        elif etype == "node_end":
-            nt = node.get("node_title") or node.get("node_id") or ""
+        # 注：日志已在流式循环里实时上报（_log_evt），此处只做结果收集，避免重复
+        if etype == "node_end":
             o = _dig_output(node)
             if o is not None:
                 node_outputs.append(o)
-                if nt:
-                    try:
-                        sz = len(json.dumps(o, ensure_ascii=False))
-                    except Exception:
-                        sz = 0
-                    log_fn("[coze:node_end] %s -> %d 字节输出" % (nt, sz))
         elif etype == "workflow_end":
             workflow_end_out = _dig_output(node)
-            log_fn("[coze:workflow_end] 工作流结束")
-        elif etype == "error":
-            log_fn("[coze] 流式返回 error: %s"
-                   % json.dumps(evt.get("data") or evt, ensure_ascii=False)[:400])
-            return None
-        # ping 等其它类型：忽略
+        # workflow_start / node_start / error / ping 等：仅日志用途，已在 _log_evt 处理
 
     # 选择最终结果：优先 workflow_end（非空），否则回退到『含真实结果的』node_end
     final: Any = None
@@ -596,7 +718,8 @@ class PdfDownloader:
     def __init__(self, out_dir: str = "pdfs", email: str = DEFAULT_EMAIL,
                  progress=None, min_delay: float = 3.0,
                  merged_json: str = None, xlsx_out: str = None,
-                 lang: str = "auto", safety=None):
+                 lang: str = "auto", safety=None,
+                 citations_out_dir: str = None, citation_style: str = "apa"):
         # normpath 归一路径分隔符（out_dir 常以正斜杠传入，join 会混用 \ /，
         # 导致落盘路径与 Excel 显示出现 C:/…\file 混用）
         self.out_dir = os.path.normpath(out_dir)
@@ -619,6 +742,11 @@ class PdfDownloader:
         self.xlsx_out = xlsx_out        # 目标 Excel 路径（None = 不回写）
         self.lang = lang
         self.safety = safety            # None = 回退到 merged meta.safety
+        # 题录回写（用户 2026-09-21）：下载器自身在 run() 结束自动把 PDF 绝对路径
+        # 写回 references.bib / references.ris / references_<style>.md，避免「下了却没写进题录」。
+        # citations_out_dir = 题录落盘目录（通常为 out_dir，即 pdfs 的父目录）；None = 不回写。
+        self.citations_out_dir = citations_out_dir
+        self.citation_style = citation_style
 
     def _log(self, msg: str):
         self.progress(msg)
@@ -729,7 +857,7 @@ class PdfDownloader:
         # 适合耗时较长的 PDF 批量下载——避免长连接被网关按单响应超时掐断。
         # 本地解析 SSE，从 workflow_end（或 node_end）事件提取最终 projects。
         try:
-            with urllib.request.urlopen(req, timeout=1200) as r:
+            with urllib.request.urlopen(req, timeout=180) as r:
                 projects = _parse_coze_stream(r, self._log)
         except Exception as e:
             self._log(f"[coze] 流式传送失败: {type(e).__name__}: {e}")
@@ -853,53 +981,170 @@ class PdfDownloader:
                 pass
         return None
 
-    def _classify(self, w: Dict[str, Any], skip_coze: bool) -> Tuple[str, Optional[str]]:
-        """单篇路由分类。返回 (kind, url_or_key)。
+    def _epmc_lookup_pmcid(self, doi: str = "", title: str = "", pmid: str = "") -> Optional[str]:
+        """按 DOI/TITLE/PMID 解析 Europe PMC 的 PMCID（本地回退预取用）。
 
-        kind ∈ {"local_direct", "local_preprint", "coze", "skip"}。
-          - local_direct   : open_access_url 已是真实 PDF 直链 → 本地下载，不送 coze
-          - local_preprint : 上游已富集预印本 / 本地查到更早预印本或 OA 直链 → 本地下载
-          - coze           : 本地无法直接下，但有 OA 或预印本链接 → 送 coze 解码
-          - skip           : 非 OA、无可用预印本、无 OA 链接 → 不送 coze（避免无效调用）
+        命中且有全文副本才返回 pmcid；限流(429)禁用整轮、503/504 退避重试。
+        复用 `_epmc_lookup_pdf_url` 的同一限速与禁用保护，行为一致。
+        """
+        if getattr(self, "_epmc_disabled", False):
+            return None
+        if not (doi or title or pmid):
+            return None
+        for attempt in range(4):
+            if getattr(self, "_epmc_disabled", False):
+                return None
+            try:
+                _epmc_ratelimit()
+                if doi:
+                    q = f"DOI:{urllib.parse.quote(doi)}"
+                elif pmid:
+                    q = f"PMID:{urllib.parse.quote(str(pmid))}"
+                else:
+                    q = f'TITLE:"{urllib.parse.quote((title or "")[:180])}"'
+                api = (f"https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+                       f"?query={q}&format=json&resultType=core&pageSize=3")
+                req = urllib.request.Request(api, headers={"User-Agent": "ct-literature-skill/1.0"})
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                for res in (data.get("resultList") or {}).get("result", [])[:3]:
+                    pc = res.get("pmcid")
+                    if pc and (res.get("hasPDF") or (res.get("fullTextUrlList") or {}).get("fullTextUrl")):
+                        return pc
+                return None
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    self._epmc_disabled = True
+                    self._log("[epmc] 被限流(429)，本次运行剩余文献不再查 Europe PMC")
+                    return None
+                elif e.code in (503, 504):
+                    self._log(f"[epmc] 服务端过载 HTTP {e.code}，退避重试({attempt + 1}/3)")
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                else:
+                    return None
+            except Exception:
+                return None
+        return None
+
+    def _oa_via_openalex(self, doi: str) -> Optional[str]:
+        """OpenAlex 取 OA 副本直链（locations 中的 PMC 直链 > best_oa > 机构库镜像）。
+
+        覆盖 Europe PMC 未索引的绿色 OA / 机构库镜像，回收率显著更高
+        （2026-09-08 实战：KEYNOTE-671 的 Lancet 正式版经 OpenAlex 的 PMC 直链拿到）。
+        副本选择优先级：① PMC 直链（pmc.ncbi.nlm.nih.gov，最稳几乎必活）
+        ② best_oa_location ③ 其余 locations 中的 pdf 直链（机构库镜像，可能 404，作兜底）。
+        """
+        if not doi:
+            return None
+        try:
+            d = _http_json("https://api.openalex.org/works/doi:" + urllib.parse.quote(doi))
+            if not d:
+                return None
+            locs = (d.get("locations") or [])
+            # ① PMC 副本优先：原生 PMC 直链常被 bot 拦截，转成最稳的 Europe PMC 渲染通道
+            for loc in locs:
+                lu = loc.get("pdf_url") or loc.get("landing_page_url") or ""
+                m = re.search(r"pmc\.ncbi\.nlm\.nih\.gov/articles/PMC(\d+)", lu)
+                if m:
+                    return f"https://europepmc.org/articles/PMC{m.group(1)}?pdf=render"
+            # ② best_oa_location
+            bo = d.get("best_oa_location") or {}
+            u = bo.get("pdf_url")
+            if u and _looks_like_pdf_url(u):
+                return u
+            # ③ 其余 locations 中的 pdf 直链（机构库镜像，可能 404，兜底）
+            for loc in locs:
+                lu = loc.get("pdf_url") or loc.get("landing_page_url") or ""
+                if lu and _looks_like_pdf_url(lu):
+                    return lu
+            return None
+        except Exception:
+            return None
+
+    def _prefetch_identifiers(self, works: List[Dict[str, Any]]):
+        """run() 起始预取：为每篇补全 doi / pmcid / openalex_oa 三类本地可用标识，整轮缓存复用。
+
+        ① 标题→DOI（仅当原 work 缺 doi）；② PMCID（Europe PMC，填充后渲染通道免 API 调用）；
+        ③ OpenAlex OA 直链（仅当没有现成可用的非 WAF 直链时才补齐，避免冗余查询）。
+        全部只读查询，不送 coze；失败静默跳过（路由保守回退 coze）。
+        """
+        for w in works:
+            title = (w.get("title") or "").strip()
+            year = w.get("year") or _year_from_date(w.get("publication_date"))
+            # ① 标题→DOI
+            if not (w.get("doi") or "").strip() and title:
+                doi, _ = _resolve_doi_from_title(title, year)
+                if doi:
+                    w["doi"] = doi
+            doi = (w.get("doi") or "").strip()
+            # ② PMCID（Europe PMC）：仅按 DOI/PMID 查（具体可靠），不按通用标题猜，
+            #    避免 Europe PMC TITLE 检索撞同名论文导致错下（anti-hallucination）。
+            if not (w.get("pmcid") or "").strip() and (doi or (w.get("pmid") or "")):
+                pc = self._epmc_lookup_pmcid(doi=doi, pmid=(w.get("pmid") or ""))
+                if pc:
+                    w["pmcid"] = pc
+                else:
+                    w["_epmc_checked"] = True   # 标记已查无副本，classify 不再重复查
+            # ③ OpenAlex OA（有现成非 WAF 直链则跳过，省一次查询）
+            if (doi and not (w.get("_oa_openalex") or "")
+                    and not (w.get("open_access_url") and _looks_like_direct_pdf(w["open_access_url"])
+                              and not _is_waf_host(w["open_access_url"]))):
+                u = self._oa_via_openalex(doi)
+                if u:
+                    w["_oa_openalex"] = u
+
+    def _classify(self, w: Dict[str, Any], skip_coze: bool) -> Tuple[str, Optional[str]]:
+        """单篇路由分类（2026-09-08 重构：本地多级 OA 回退优先，coze 仅最后手段）。
+
+        返回 (kind, url_or_key)。kind ∈ {"local_direct","local_preprint","coze","skip"}。
+
+        本地优先链（纯标准库，不送云端）：
+          ① Europe PMC 渲染通道：pmcid 直接拼 URL（免 API）；否则按 DOI 查（命中即本地下）
+          ② OpenAlex OA 直链（机构库 / PMC / 金色 OA 镜像）
+          ③ 非 WAF 主机的 OA/预印本直链
+          ④ Unpaywall OA 直链 / 更早预印本
+          ⑤ WAF 出版商直链（仍试一次本地，失败再 coze）
+        coze 仅在「本地全失败 且 有 OA/预印本/DOI 信号」时作为最后手段
+        （仍遵守「非 OA 不送云端」红线：无信号直接 skip）。
         """
         oa = (w.get("open_access_url") or "").strip()
         doi = (w.get("doi") or "").strip()
-        pp = w.get("preprint")
+        pmcid = (w.get("pmcid") or "").strip()
+        pmid = (w.get("pmid") or "").strip()
         title = (w.get("title") or "").strip()
         is_oa = self._work_is_oa(w)
 
-        # ① 直链 PDF（OA/预印本）→ 本地
-        if oa and _looks_like_direct_pdf(oa):
-            return ("local_direct", oa)
-        # 上游已富集的预印本候选（--preprint-fallback）→ 本地
-        if isinstance(pp, dict) and pp.get("url") and _looks_like_direct_pdf(pp["url"]):
-            return ("local_preprint", pp["url"])
+        # ① Europe PMC 渲染通道（最稳 OA 源）：本地，不送 coze
+        if pmcid:
+            return ("local_preprint", f"https://europepmc.org/articles/{pmcid}?pdf=render")
+        if (doi or pmid) and not w.get("_epmc_checked"):
+            epmc = self._epmc_lookup_pdf_url(doi=doi, pmid=pmid)
+            if epmc:
+                return ("local_preprint", epmc)
 
-        # ② 本地解析：OA 直链 / 更早预印本（本地只读，非 coze）
+        # ② OpenAlex OA 直链
+        oax = w.get("_oa_openalex") or (self._oa_via_openalex(doi) if doi else None)
+        if oax:
+            return ("local_preprint", oax)
+
+        # ③ 非 WAF 主机的 OA/预印本直链 → 本地直下
+        if oa and _looks_like_direct_pdf(oa) and not _is_waf_host(oa):
+            return ("local_direct", oa)
+
+        # ④ Unpaywall OA 直链 / 更早预印本（本地只读）
         lp = self._find_earlier_preprint(doi, title)
         if lp:
             return ("local_preprint", lp[1])
 
-        # ③ 有 OA 或预印本链接但本地无法直接下 → coze
-        has_signal = bool(oa) or bool(pp) or is_oa
-        if not has_signal and doi:
-            d = self._upw_look(doi)
-            # Unpaywall 可达且确认 is_oa → 有信号；不可达（None）→ 保守送 coze
-            if d is not None and d.get("is_oa"):
-                has_signal = True
-            elif d is None:
-                has_signal = True
+        # ⑤ WAF 出版商直链：仍试一次本地（OA 子集偶可达），失败再 coze
+        if oa and _looks_like_direct_pdf(oa):
+            return ("local_direct", oa)
+
+        # ⑥ 有 OA/预印本/DOI 信号 → coze（最后手段）；非 OA 无信号 → 跳过，不送云端
+        has_signal = bool(oa) or bool(w.get("preprint")) or is_oa or bool(doi)
         if has_signal:
             return ("coze", oa or doi)
-        # ② 负向前兜底：非 OA 但可能已 deposited PMC 作者手稿（Unpaywall 漏标 is_oa 的盲区）。
-        #    本地按 DOI/PMID 查 Europe PMC 主库（注意：非 _find_earlier_preprint 用的 PPR 预印本索引），
-        #    命中 PMC 副本即本地下载，仍不送 coze（符合「非 OA 不送云端」红线）。
-        #    复用 _epmc_lookup_pdf_url（自带 1.0s 限流 + 429 禁用保护），已 used in coze 兜底路径，行为一致。
-        if doi or w.get("pmid"):
-            epmc = self._epmc_lookup_pdf_url(doi=doi, pmid=(w.get("pmid") or ""))
-            if epmc:
-                return ("local_preprint", epmc)
-        # ③ 负向：非 OA、无预印本、无 OA 链接、无 PMC 手稿 → 跳过 coze
         return ("skip", None)
 
     # ── Excel 自动回写（下沉职责，run() 正常结束后调用）──
@@ -943,6 +1188,39 @@ class PdfDownloader:
             self._log(f"[WARN] xlsx 回写 PDF 路径失败（不影响已下载的 PDF）: {_xe}")
             return ""
 
+    def _write_back_citations(self, works: List[Dict[str, Any]]) -> str:
+        """题录回写：把 PDF 绝对路径写回 references.bib / references.ris / references_<style>.md。
+
+        与 _write_back_xlsx 同口径（用户 2026-09-21）：下载器自身在 run() 结束自动重渲，
+        避免「PDF 已下载却没写进题录」（此前仅主流程内联、独立直驱路径易漏）。
+        需要构造时给定 citations_out_dir（题录落盘目录，通常为 out_dir）才生效；否则跳过。
+        返回被更新的任一题录文件绝对路径；未配置或失败时返回 ""。
+        """
+        if not self.citations_out_dir:
+            return ""
+        try:
+            import sys as _sys
+            _scripts = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "scripts")
+            if _scripts not in _sys.path:
+                _sys.path.insert(0, _scripts)
+            from format_citations import export_citations
+            # 落盘路径可能相对 self.out_dir → 统一绝对路径再写入（与 _write_back_xlsx 一致）
+            for _w in works:
+                if _w.get("local_pdf_path"):
+                    _w["local_pdf_path"] = os.path.abspath(_w["local_pdf_path"])
+            _res = export_citations(
+                {"count": len(works), "works": works},
+                style=self.citation_style or "apa",
+                out_dir=self.citations_out_dir, lang=self.lang)
+            _bib = _res.get("bib_path") or ""
+            self._log(f"[OK] 题录已更新：PDF 绝对路径已写入 references.bib / .ris / "
+                      f".md -> {_bib}")
+            return os.path.abspath(_bib) if _bib else ""
+        except Exception as _ce:
+            self._log(f"[WARN] 题录回写 PDF 路径失败（不影响已下载的 PDF）: {_ce}")
+            return ""
+
     def run(self, works: List[Dict[str, Any]], skip_coze: bool = False) -> Dict[str, Any]:
         """Batch PDF download (four-bucket routing: local direct / local preprint / coze / skip).
 
@@ -951,7 +1229,10 @@ class PdfDownloader:
           - non-OA paper: first check local "earlier preprint / OA direct link" (_find_earlier_preprint);
             if found -> local_preprint local download; if not and no OA/preprint signal -> skip (no coze)
           - only when "cannot download locally" AND "has OA or preprint link" -> coze decode
-        Speed arch (2026-09-06): local download || coze decode; coze sub-batch pipes download.
+        Speed arch (2026-09-19 fix): coze decode thread is started BEFORE the local download
+        phase, so decode and download genuinely overlap; each coze sub-batch pipes its links
+        straight into the concurrent downloader. The "local failed -> coze retry" pass waits on
+        _local_phase_done so it still runs after the main batches (no endpoint contention).
         """
         stats = {"total": len(works), "ok": 0, "coze_sent": 0,
                  "coze_ok": 0, "manual_needed": 0, "failed": 0,
@@ -985,11 +1266,14 @@ class PdfDownloader:
 
         # 2) prefetch Unpaywall (local prescreen; classify reuses cache)
         self._prefetch_unpaywall(works)
+        # 2b) prefetch local OA identifiers (doi/pmcid/openalex_oa) — 本地多级回退前置
+        self._prefetch_identifiers(works)
 
         # 3) classify into buckets (local-first prescreen)
         work_by_key: Dict[str, Any] = {}
         local_tasks = []      # (url, doi, work, label)
         coze_keys: List[str] = []
+        coze_work_ids = set()          # 路由到 coze 的 work（id()），4b 据此排除重复兜底
         for w in works:
             oa = (w.get("open_access_url") or "").strip()
             doi = (w.get("doi") or "").strip()
@@ -1011,6 +1295,7 @@ class PdfDownloader:
             elif kind == "coze":
                 coze_keys.append(val)
                 work_by_key[val] = w
+                coze_work_ids.add(id(w))
             else:  # skip: non-OA and no preprint -> do NOT call coze
                 w["local_pdf_path"] = None
                 w["pdf_download_note"] = "non-OA and no usable preprint; skip cloud decode (per rule)"
@@ -1070,39 +1355,17 @@ class PdfDownloader:
                         pass
             self._log(f"[pdf] {label} concurrent download done: {ok_n}/{len(tasks)} ok")
 
-        # 4) local tasks concurrent download (parallel with coze decode in bg)
-        if local_tasks:
-            self._log(f"[pdf] local direct/preprint concurrent download: {len(local_tasks)} "
-                      f"(max workers {MAX_DOWNLOAD_WORKERS})")
-            with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as ex:
-                futs = [ex.submit(_download_one, u, d, w, v) for (u, d, w, v) in local_tasks]
-                for _ in as_completed(futs):
-                    pass
-            self._log("[pdf] local direct/preprint download done")
-
-        # 4b) 收集本地下载失败的条目，送 coze 兜底重试（2026-09-07 新增）
-        #    仅当本地下载失败、且该条目有 DOI 或 URL 可送 coze 时才重试。
-        #    重试在主线 coze 批次完成后串行发送，避免并发限流。
-        local_failed_keys: List[str] = []
-        for w in works:
-            if w.get("local_pdf_path"):
-                continue
-            # 只重试原本走 local_direct/local_preprint 的条目（原本就走 coze 的已在 coze_keys 里）
-            via = w.get("pdf_via") or ""
-            note = w.get("pdf_download_note") or ""
-            if via in ("oa_direct_local", "preprint_local") or "download failed" in note:
-                doi = (w.get("doi") or "").strip()
-                oa = (w.get("open_access_url") or "").strip()
-                key = oa or doi
-                if key:
-                    local_failed_keys.append(key)
-                    work_by_key[key] = w
-        if local_failed_keys:
-            self._log(f"[pdf] local failed {len(local_failed_keys)} items -> coze fallback retry")
-
-        # 5) coze decode (bg thread): coze_keys split into <=COZE_SUB_BATCH sub-batches,
-        #    each returned batch pipes into concurrent download (P1 pipeline).
+        # ── coze 解码线程：必须在本地下载【之前】启动 ──────────────────────────
+        # 旧顺序是「分类 → 本地下载（阻塞跑完）→ 才启动 coze 解码」，虽然 docstring 写着
+        # 「local download || coze decode」，实际是本地整段跑完 coze 才发出——用户
+        # 2026-09-19 观察到的「先本地搜一遍、再送扣子」白等就在这一段。
+        # 线程提前后：coze 与本地下载真正重叠，且每返回一个子批就立刻下载该批直链
+        # （P1 流水线），不再攒到末尾统一下载。
+        # 「本地下载失败 → coze 兜底重试」必须等本地阶段跑完才知道有哪些失败项，故由
+        # _local_phase_done 触发，仍排在主批次之后（也避免与主批次同时打端点）。
         coze_box: Dict[str, Any] = {"projects": None, "done": False}
+        local_failed_keys: List[str] = []      # 4b 原地填充；worker 在事件置位后才读
+        _local_phase_done = _th.Event()
 
         def _coze_worker():
             try:
@@ -1137,11 +1400,14 @@ class PdfDownloader:
                     stats["coze_sent"] = len(coze_keys)
                     self._log(f"[coze] decode done: {len(collected)} records")
                 # ── 本地下载失败的条目，送 coze 兜底重试 ──
-                if local_failed_keys and not skip_coze:
+                # 等本地阶段（分类 → 本地下载 → 4b 收集失败项）走完再发，
+                # 否则此刻 local_failed_keys 还是空的。
+                _local_phase_done.wait(timeout=1800)
+                if local_failed_keys:
                     self._log(f"[coze] local-fallback retry: {len(local_failed_keys)} items sent...")
                     stats["local_fallback_coze_sent"] = len(local_failed_keys)
                     time.sleep(COZE_BATCH_INTERVAL)
-                    fb_part = self._call_coze_unified(local_failed_keys)
+                    fb_part = self._call_coze_unified(list(local_failed_keys))
                     if fb_part is None:
                         self._log("[coze] local-fallback retry send failed, local fallback")
                         fb_part = self._local_fallback(local_failed_keys, work_by_key)
@@ -1163,10 +1429,52 @@ class PdfDownloader:
                 coze_box["done"] = True
 
         _coze_thread = None
-        if (coze_keys or local_failed_keys) and not skip_coze:
+        if not skip_coze:
+            # 此刻 local_failed_keys 还是空的，但线程要等 _local_phase_done 置位后才读它；
+            # 所以即便本次没有 coze_keys 也要启动（可能只有本地失败项需要兜底）。
             _coze_thread = _th.Thread(target=_coze_worker, daemon=True, name="pdf-coze-decode")
             _coze_thread.start()
-            self._log(f"[pdf] local download || coze decode: local {len(local_tasks)} / coze {len(coze_keys)}")
+            self._log(f"[pdf] coze decode started in parallel with local downloads: "
+                      f"local {len(local_tasks)} / coze {len(coze_keys)}")
+
+        # 4) local tasks concurrent download (真与 coze decode 并行)
+        if local_tasks:
+            self._log(f"[pdf] local direct/preprint concurrent download: {len(local_tasks)} "
+                      f"(max workers {MAX_DOWNLOAD_WORKERS})")
+            with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as ex:
+                futs = [ex.submit(_download_one, u, d, w, v) for (u, d, w, v) in local_tasks]
+                for _ in as_completed(futs):
+                    pass
+            self._log("[pdf] local direct/preprint download done")
+
+        # 4b) 收集本地下载失败的条目，送 coze 兜底重试（2026-09-07 新增）
+        #    仅当本地下载失败、且该条目有 DOI 或 URL 可送 coze 时才重试。
+        #    注意：结果**原地 extend** 进上面已声明并传给 worker 的那个 list——重新赋值
+        #    会让 worker 闭包仍指向旧对象（静默失效）。
+        #    还要排除「本来就路由到 coze」的条目：coze 线程现在与本地下载同时跑，
+        #    它可能已经把这类条目下完/下失败并写上 pdf_download_note，若不排除就会被
+        #    当成「本地失败」再送一次端点（重复解码 + 白烧配额）。
+        try:
+            for w in works:
+                if w.get("local_pdf_path"):
+                    continue
+                if id(w) in coze_work_ids:      # 本来就走 coze 的，不重复兜底
+                    continue
+                # 只重试原本走 local_direct/local_preprint 的条目
+                via = w.get("pdf_via") or ""
+                note = w.get("pdf_download_note") or ""
+                if via in ("oa_direct_local", "preprint_local") or "download failed" in note:
+                    doi = (w.get("doi") or "").strip()
+                    oa = (w.get("open_access_url") or "").strip()
+                    key = oa or doi
+                    if key:
+                        local_failed_keys.append(key)
+                        work_by_key[key] = w
+            if local_failed_keys:
+                self._log(f"[pdf] local failed {len(local_failed_keys)} items -> coze fallback retry")
+        finally:
+            # 无论成败都要放行：worker 在 1800s 超时前一直等这个信号
+            _local_phase_done.set()
 
         # P2: heartbeat every 10s during coze decode wait
         _hb_stop = _th.Event()
@@ -1213,6 +1521,13 @@ class PdfDownloader:
             _upd = self._write_back_xlsx(works)
             if _upd:
                 stats["xlsx_updated"] = _upd
+        except Exception:
+            pass
+        # 自动回写题录：把 PDF 绝对路径写回 references.bib / .ris / .md（用户 2026-09-21）。
+        try:
+            _cites = self._write_back_citations(works)
+            if _cites:
+                stats["citations_updated"] = _cites
         except Exception:
             pass
         return stats
