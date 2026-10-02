@@ -79,6 +79,12 @@ Guidelines are **version-pinned** reference standards — at analysis time we re
 | **P0 · Evidence provenance log** | All | `evidence_log.json/.md` + workbook sheet + HTML block: query→source→hits→retrieved_at→verification rate |
 | **P1 · PROSPERO registry** | Review register | `--with-prospero` (opt-in, key-gated, **reserved**) — dormant no-op skip without token; never claimed functional |
 | **G · Guideline corpus** | Guideline orgs | `--with-guidelines` → local pointer corpus (see above) |
+| **P0 · 结构化 PICO 概念** | topic/干预/对照/结局 | `--concept TYPE=VALUE`（可重复，TYPE∈{condition,population,intervention,comparator,outcome,endpoint,study_design,biomarker,drug,indication}）：概念 AND 拼入检索式、独立成轴；MeSH 精确归一化 + `mapping_status` 审计（exact_label/synonym/unmapped_literal，模糊匹配拒绝、未命中保留原词） |
+| **P0 · 检索深度预算** | resource control | `--depth quick\|standard\|deep`：决定每源上限与弱化结果救援开关（**非证据质量评级**）；不传则沿用 `--max` 旧语义 |
+| **P0 · 证据维度分轨** | safety vs efficacy | 合并后每篇打 `evidence_dimension`（=`safety` 若 `is_safety`，否则 `general`）；`--safety` 触发独立 safety lane，安全性信号不被疗效文献稀释 |
+| **P1 · 四态审计 ledger** | provenance | `evidence_log` 新增 `status∈{ok,empty,error,skipped}` + `coverage∈{healthy,partial,empty,critical_gap}`；被显式关闭的源记 `skipped`（not_run）、缺口诚实呈现、**不归零** |
+| **P1 · lane 规划视图** | dry-run | SAFE PREVIEW 直接打印 lane 规划（purpose / 源 / evidence_dimension / 备注），跑前可审查 |
+| **P1 · 弱化结果救援** | recall rescue | `standard`/`deep` 且合并唯一文献 < 5 且概念曾收窄检索式时，放宽至主题级回补一轮（单次、非致命；无新增记 skipped） |
 
 ## Unified work schema
 
@@ -131,3 +137,14 @@ python scripts/ct_literature.py --topic "osimertinib"            # preview (no -
 ### OpenAlex API key (recommended since 2026-02-13)
 
 Keyless is capped at 100 credits/day; a free key lifts to 100k/day. **Zero-friction:** drop the key into the skill's `.env` (copy from `.env.example`) — no extra flag needed. `http_utils.load_openalex_key()` auto-resolves: env `OPENALEX_API_KEY` → skill-root `.env` → `scripts/.env` (key value never printed). Explicit provision also works (`--openalex-key`). Application steps, quota, troubleshooting → `openalex_key.md`.
+
+## Changelog
+
+### v1.2.0 (2026-09-30) — 检索结构模型（借鉴「组小学」专家，P0/P1）
+- **新增** 结构化 PICO 概念 `--concept TYPE=VALUE`（可重复）：概念 AND 拼入检索式、干预/对照/结局独立成轴；MeSH 精确归一化 + `mapping_status` 审计。
+- **新增** 检索深度预算 `--depth quick|standard|deep`：决定每源上限与弱化结果救援开关。
+- **新增** 证据维度分轨：合并后每篇打 `evidence_dimension`（safety/general）；`--safety` 触发独立 safety lane。
+- **新增** 四态审计 ledger + coverage 判定：`status∈{ok,empty,error,skipped}` + `coverage∈{healthy,partial,empty,critical_gap}`；关闭源记 skipped、不归零。
+- **新增** SAFE PREVIEW 打印 lane 规划视图；`standard`/`deep` 下合并集偏薄触发弱化结果救援（单次、非致命）。
+- **约束**：全部 additive、向后兼容；不引入组小学的 7 场景全量 / first-class trial·drug·target 对象 / 靶点基因变异实体（越 ct-literature 临床文献边界，与 ct-registry / ct-safety 分工冲突）。
+- **验证**：SAFE PREVIEW + `evidence_log.build_log` 单元验证通过；一次本地最小化 live run 端到端通过（concepts 入审计、coverage=healthy、disabled 源 skipped）。

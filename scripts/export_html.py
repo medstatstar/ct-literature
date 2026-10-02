@@ -52,6 +52,10 @@ _LABELS = {
         "ev.no_id": "No identifier", "ev.suspicious": "Suspicious",
         "ev.mismatch": "Mismatch",
         "ev.mismatch.note": "identifier resolved to a LIVE resource but title/author do NOT match — possible hallucinated/incorrect id",
+        "src.banner": "🔎 Source: ct-literature (local + Coze dual-engine; OpenAlex primary)",
+        "cite.foot": "⚠️ Citation count reflects impact, NOT evidence quality; clinical evidence grade follows study design (RCT / systematic review).",
+        "preprint.tag": "⚠️ preprint · not peer-reviewed",
+        "ev.src_summary": "Source status",
         "cfg.warn": ("OpenAlex API key not configured — this run used the keyless pool "
                      "(100 credits/day, easily rate-limited). Apply for a FREE key and write it "
                      "to the skill `.env` as `OPENALEX_API_KEY=<key>`, then re-run for full coverage:"),
@@ -93,6 +97,10 @@ _LABELS = {
         "ev.no_id": "无标识", "ev.suspicious": "可疑",
         "ev.mismatch": "不一致",
         "ev.mismatch.note": "标识符解析到存活资源，但标题/作者不一致 —— 可能为幻觉或错误 id",
+        "src.banner": "🔎 检索来源：ct-literature（本地 + Coze 双引擎；OpenAlex 为主源）",
+        "cite.foot": "⚠️ 被引次数仅反映影响力，非证据质量；临床证据等级以研究设计（RCT / 系统评价）为准。",
+        "preprint.tag": "⚠️ 预印本·未经同行评审",
+        "ev.src_summary": "数据源状态",
         "cfg.warn": ("未配置 OpenAlex API key —— 本次以 keyless 模式运行（限 100 次/天，易触发 429 限流）。"
                      "建议免费申请 key 并写入技能目录 `.env`（`OPENALEX_API_KEY=<key>`）后重跑以获得完整覆盖："),
         "ev.preview": "预览，已跳过", "ev.src": "来源", "ev.query": "检索式",
@@ -346,7 +354,7 @@ def concept_network_svg(works, P, top_n=25, min_edge=2):
     return "".join(svg)
 
 
-def render(data, lang, safety=False):
+def render(data, lang, safety=False, report_first=False):
     # resolve "auto" to a concrete language (mirrors ct-pipeline fix) — never
     # index _LABELS with the literal "auto" (KeyError).
     if lang == "auto":
@@ -426,6 +434,25 @@ def render(data, lang, safety=False):
         f'<div class="kpi-val">{esc(val)}</div><div class="kpi-sub">{esc(sub)}</div></div>'
         for lbl, val, sub in kpis
     )
+    # U7: report-first progress indicator — shows which sections are filled vs pending
+    rf_progress = ""
+    if report_first:
+        _rf_sections = [
+            ("overview", True),           # always present
+            ("works", bool(works)),
+            ("prisma", bool(data.get("prisma"))),
+            ("net", bool(works)),         # needs >= 2 docs with terms
+            ("evidence", bool(data.get("evidence_log") or data.get("verification"))),
+        ]
+        _rf_filled = sum(1 for _, ok in _rf_sections if ok)
+        _rf_steps = "".join(
+            f'<span class="rf-step {"done" if ok else "pending"}">{"✓" if ok else "○"} {name}</span>'
+            for name, ok in _rf_sections
+        )
+        rf_progress = (f'<div class="rf-progress">'
+                       f'<div class="rf-bar"><div class="rf-fill" style="width:{_rf_filled * 100 // len(_rf_sections)}%"></div></div>'
+                       f'<div class="rf-steps">{_rf_steps}</div>'
+                       f'</div>')
     # "next steps" guidance strip shown to the end user on the report itself
     tips_html = (f'<div class="tips"><div class="tips-title">{esc(L["tips.title"])}</div><ol>'
                  f'<li>{esc(L["tips.t1"])}</li>'
@@ -459,6 +486,9 @@ def render(data, lang, safety=False):
         safe = w.get("is_safety")
         tr_cls = ' class="safety"' if safe else ""
         url = _html_link(w.get("url"))
+        # preprint badge (R4: explicit "not peer-reviewed" labelling)
+        is_pp = bool(w.get("preprint")) or (w.get("source") in ("bioRxiv", "medRxiv", "arXiv"))
+        pp_badge = '<span class="pp">⚠️ 预印本</span> ' if is_pp else ""
         # source and id merged into one cell as two stacked lines
         # (database name on top, record id below); title itself links to the record
         src_full = w.get("source") or "—"
@@ -484,7 +514,7 @@ def render(data, lang, safety=False):
         auth_full = _fmt_authors(w.get("authors"), max_n=None)
         auth_show = _fmt_authors(w.get("authors"), max_n=4)
         wrows += (f'<tr{tr_cls}><td class="srcid" title="{esc(srcid_full)}">{srcid_html}</td>'
-                  f'<td class="title">{title_html}</td>'
+                  f'<td class="title">{pp_badge}{title_html}</td>'
                   f'<td class="abs{" expandable" if expandable else ""}">{abs_cell}</td>'
                   f'<td class="auths" title="{esc(auth_full)}">{esc(auth_show)}</td>'
                   f'<td class="num">{esc(w.get("year"))}</td><td>{esc(w.get("publication"))}</td>'
@@ -601,11 +631,22 @@ def render(data, lang, safety=False):
                 f'<tbody>{rows}</tbody></table>')
         if not blocks:
             blocks.append('<div class="ev-verify">—</div>')
+        # R6: source-status summary (tool-error != empty-result)
+        if srcs:
+            _st = {}
+            for s in srcs:
+                _st[s.get("status", "ok")] = _st.get(s.get("status", "ok"), 0) + 1
+            blocks.append(
+                f'<div class="ev-verify-note">{esc(L["ev.src_summary"])}: '
+                f'{_st.get("ok", 0)} OK · {_st.get("error", 0)} error · '
+                f'{_st.get("skipped", 0)} skipped · {_st.get("empty", 0)} empty</div>')
         ev_note = ('<div class="prisma-note">Provenance audit trail (ct-base §17.1): '
                    'every evidence item is traceable to its source query and retrieval time. '
                    'Verification status is advisory, not a substitute for human review. / '
                    '证据溯源审计（ct-base §17.1）：每条证据可回溯至来源检索式与检索时间；'
                    '验证状态仅供参考，不替代人工核查。</div>')
+        # R3: citation count ≠ quality disclaimer
+        ev_note += f'<div class="prisma-note">{esc(L["cite.foot"])}</div>'
         evidence_html = (
             f'<h2>{esc(L["evidence"])}</h2>'
             f'<div class="prisma">{"".join(blocks)}{ev_note}</div>')
@@ -625,6 +666,8 @@ def render(data, lang, safety=False):
     .banner .searchinfo .chip {{ background:rgba(255,255,255,.15); border-radius:10px;
       padding:2px 10px; opacity:.95; }}
     .banner .searchinfo .chip b {{ font-weight:600; }}
+    .banner .pp {{ background:#fff5d6; color:#8a5a00; border-radius:12px;
+      padding:2px 10px; font-size:11px; font-weight:600; }}
     .wrap {{ max-width:1180px; margin:0 auto; padding:20px 24px 60px; }}
     h2 {{ color:var(--navy); border-left:5px solid var(--blue); padding-left:10px;
           margin-top:30px; font-size:17px; }}
@@ -676,6 +719,14 @@ def render(data, lang, safety=False):
     .prisma svg {{ display:block; max-width:620px; margin:0 auto 10px; }}
     .prisma table {{ max-width:420px; margin:0 auto; }}
     .prisma-note {{ font-size:12px; color:var(--greytx); margin-top:8px; text-align:center; }}
+    /* U7: report-first progress bar */
+    .rf-progress {{ margin-top:14px; background:#fff; border:1px solid var(--grid); border-radius:8px; padding:12px 16px; }}
+    .rf-bar {{ height:8px; background:#e8ecef; border-radius:4px; overflow:hidden; }}
+    .rf-fill {{ height:100%; background:var(--blue); border-radius:4px; transition:width .3s ease; }}
+    .rf-steps {{ display:flex; gap:12px; margin-top:8px; flex-wrap:wrap; font-size:12px; }}
+    .rf-step {{ padding:2px 8px; border-radius:10px; }}
+    .rf-step.done {{ background:#e8f8f0; color:#1a6b3a; }}
+    .rf-step.pending {{ background:#f0f0f0; color:#999; }}
     @media (max-width:880px) {{ .dist {{ grid-template-columns:1fr; }} .kpis {{ grid-template-columns:repeat(2,1fr); }} }}
     @media print {{
       @page {{ margin:12mm; }}
@@ -697,9 +748,11 @@ def render(data, lang, safety=False):
 <style>{css}</style></head>
 <body>
 <div class="banner"><h1>{esc(L['doc_title'])}</h1>
-<div class="meta">{esc(L['generated'])}: {now} ｜ {total} works</div>{searchinfo}</div>
+<div class="meta">{esc(L['generated'])}: {now} ｜ {total} works</div>
+<div class="meta">{esc(L['src.banner'])}</div>{searchinfo}</div>
 <div class="wrap">
   <div class="kpis">{kpi_html}</div>
+  {rf_progress}
   {pdf_summary}
   {tips_html}
 

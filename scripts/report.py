@@ -46,8 +46,8 @@ _LABELS = {
                              "results come only from the other available sources.",
         "no_works": "_No works retrieved. Try a broader topic or widen the year range._",
         "top_works": "Top works by citations",
-        "tbl.hdr": "| # | Year | Type | Title | Authors | Cited | Rel | Source | OA |",
-        "tbl.sep": "|---|---|---|---|---|---|---|---|---|",
+        "tbl.hdr": "| # | Year | Type | Ev.Level | Title | Authors | Cited | Rel | Source | OA | Link |",
+        "tbl.sep": "|---|---|---|---|---|---|---|---|---|---|---|",
         "oa_available": "📥 = open-access full text available (%d of %d, %.0f%%)",
         "key_details": "Key details",
         "lbl.authors": "Authors", "lbl.journal": "Journal", "lbl.date": "Date",
@@ -89,6 +89,10 @@ _LABELS = {
         "ev.status": "Status",
         "ev.mismatch": "mismatch",
         "ev.mismatch.note": " (identifier resolved to a LIVE resource but title/author do NOT match — possible hallucinated/incorrect id)",
+        "src.banner": "🔎 Source: ct-literature (local + Coze dual-engine; OpenAlex primary)",
+        "cite.foot": "⚠️ Citation count reflects impact, NOT evidence quality; clinical evidence grade follows study design (RCT / systematic review).",
+        "preprint.tag": "⚠️ preprint · not peer-reviewed",
+        "ev.src_summary": "Source status",
     },
     "zh": {
         "title": "📚 文献检索报告",
@@ -113,8 +117,8 @@ _LABELS = {
         "cfg.degraded.note": "以下数据源未能正常返回（限流 / 报错），结果仅来自其余可用数据源。",
         "no_works": "_未检索到文献。请尝试更宽泛的主题或放宽年份范围。_",
         "top_works": "按被引排序的 Top 文献",
-        "tbl.hdr": "| # | 年份 | 类型 | 标题 | 作者 | 被引 | 相关度 | 来源 | 开放获取 |",
-        "tbl.sep": "|---|---|---|---|---|---|---|---|---|",
+        "tbl.hdr": "| # | 年份 | 类型 | 证据等级 | 标题 | 作者 | 被引 | 相关度 | 来源 | 开放获取 | 链接 |",
+        "tbl.sep": "|---|---|---|---|---|---|---|---|---|---|---|",
         "oa_available": "📥 = 可获取开放获取全文（%d / %d，%.0f%%）",
         "key_details": "关键文献详情",
         "lbl.authors": "作者", "lbl.journal": "期刊", "lbl.date": "日期",
@@ -154,6 +158,10 @@ _LABELS = {
         "ev.status": "状态",
         "ev.mismatch": "不一致",
         "ev.mismatch.note": "（标识符解析到存活资源，但标题/作者不一致 —— 可能为幻觉或错误 id）",
+        "src.banner": "🔎 检索来源：ct-literature（本地 + Coze 双引擎；OpenAlex 为主源）",
+        "cite.foot": "⚠️ 被引次数仅反映影响力，非证据质量；临床证据等级以研究设计（RCT / 系统评价）为准。",
+        "preprint.tag": "⚠️ 预印本·未经同行评审",
+        "ev.src_summary": "数据源状态",
     },
 }
 
@@ -167,6 +175,19 @@ def _resolve_lang(lang):
             _l = "zh"
         return "zh" if _l.startswith("zh") else "en"
     return "zh" if lang in ("zh", "zh-CN", "zh-cn") else "en"
+
+
+def _is_preprint(w):
+    """Detect a preprint work (bioRxiv / medRxiv / arXiv, or explicit preprint flag)."""
+    if not isinstance(w, dict):
+        return False
+    if w.get("preprint"):
+        return True
+    src = (w.get("source") or "").lower()
+    if src in ("biorxiv", "medrxiv", "arxiv"):
+        return True
+    st = (w.get("study_type") or w.get("type") or "").lower()
+    return "preprint" in st
 
 
 def _authors_str(authors):
@@ -219,6 +240,8 @@ def render(works, meta=None, lang="auto"):
     yr_range = "%d–%d" % (min(years), max(years)) if years else "n/a"
 
     lines = []
+    lines.append("> %s\n" % L["src.banner"])
+    lines.append("")
     lines.append("## %s\n" % L["title"])
     lines.append("- **%s**: %s" % (L["m.topic"], meta.get("topic", "—")))
     lines.append("- **%s**: %s" % (L["m.review_type"], meta.get("review_type", "all")))
@@ -285,16 +308,23 @@ def render(works, meta=None, lang="auto"):
         oa_cell = "[📥](%s)" % oa_url if oa_url else ""
         rel = w.get("relevance_score")
         rel_cell = "%.0f%%" % (float(rel) * 100) if isinstance(rel, (int, float)) else "—"
-        lines.append("| %d | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+        _url = w.get("url") or ("https://doi.org/" + w["doi"] if w.get("doi") else "")
+        _url_cell = "[链接](%s)" % _url if _url else "无"
+        _ev = w.get("evidence_level") or "—"
+        if _is_preprint(w):
+            title = (title + " " + L["preprint.tag"])[:200]
+        lines.append("| %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
             i,
             w.get("year") or "—",
             w.get("study_type") or w.get("type") or "—",
+            _ev,
             title,
             _authors_str(w.get("authors")),
             _int_or_none(w.get("cited_by_count")) or 0,
             rel_cell,
             "/".join(_src_list(w)) or "—",
             oa_cell,
+            _url_cell,
         ))
     lines.append("")
     # OA summary line
@@ -348,6 +378,8 @@ def render(works, meta=None, lang="auto"):
                 lines.append("- **%s**: %s" % (_label, _txt))
         if w.get("is_retracted"):
             lines.append("- ⚠️ **%s**" % L["retracted"])
+        if _is_preprint(w):
+            lines.append("- **%s**" % L["preprint.tag"])
         # Full abstract
         abstract = w.get("abstract_snippet")
         if abstract:
@@ -372,6 +404,10 @@ def render(works, meta=None, lang="auto"):
             lines.append("")
         lines.append("> ⚠️ %s" % prisma.get("note", L["prisma.note"]))
         lines.append("")
+    else:
+        # U2: section must exist even when empty (tooluniverse-drug-research inspired)
+        lines.append("### %s\n" % L["prisma.title"])
+        lines.append("_⚠️ 未生成 PRISMA 筛选漏斗（数据不可用；%s)_\n" % L["prisma.note"])
 
     # Study-type distribution
     dist = {}
@@ -461,12 +497,22 @@ def render(works, meta=None, lang="auto"):
                         s.get("review_type") or "all", yr,
                         "Y" if s.get("safety") else "—", s.get("count", 0),
                         (s.get("retrieved_at") or "")[:19], s.get("status", "")))
+                # R6: explicit source-status summary (tool-error != empty-result)
+                _st = {}
+                for s in srcs:
+                    _st[s.get("status", "ok")] = _st.get(s.get("status", "ok"), 0) + 1
+                lines.append("- **%s**：成功 %d · 报错 %d · 跳过 %d · 空 %d" % (
+                    L["ev.src_summary"], _st.get("ok", 0), _st.get("error", 0),
+                    _st.get("skipped", 0), _st.get("empty", 0)))
                 lines.append("")
             if evidence.get("generated_at"):
                 lines.append("- **%s**: %s" % (L["ev.generated"], evidence["generated_at"]))
                 lines.append("")
         lines.append("> %s" % L["ev.note"])
         lines.append("")
+
+    # R3: citation-count ≠ quality disclaimer (advisory, not a substitute for design grade)
+    lines.append("> %s" % L["cite.foot"])
 
     return "\n".join(lines)
 

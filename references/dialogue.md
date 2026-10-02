@@ -31,12 +31,12 @@ wrong scope.
 #### Echo block (append after every run)
 
 ```
-## 当前检索设定：topic=… | type=… | year=… | safety=… | sources=… | max=… | verify=…
+## 当前检索设定：topic=… | type=… | year=… | safety=… | depth=… | concepts=… | sources=… | max=… | verify=…
 ```
 
 - Fixed prefix `## 当前检索设定：` (inherited by search_menu.md §13)
 - Fields are `key=value`, pipe-separated; missing defaults use `—`; **never omit fields**
-- Full field list: `topic / type / year / safety / sources / max / verify`
+- Full field list: `topic / type / year / safety / depth / concepts / sources / max / verify`
 
 #### Follow-ups change only the changed fields
 

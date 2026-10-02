@@ -39,6 +39,42 @@
     "en": "🔎 Literature search started. Results may take a few minutes to return — typically {est}. ({vmode}; larger result sets or rate-limit backoff take longer.) Output → {out}",
     "zh": "🔎 文献检索已开始。返回结果可能需等待数分钟——通常 {est}。（{vmode}；结果集越大或遇限流退避时更久。）输出 → {out}"
   },
+  "run.busy_hint": {
+    "en": "📚 Searching configured academic databases via Coze — retrieval may take a while. Do not resubmit the same query; results will appear here when ready.",
+    "zh": "📚 正在通过 Coze 检索已配置的多个学术数据库——检索可能耗时较长。请勿重复提交相同 query，结果就绪后此处会更新。"
+  },
+  "snowball.starting": {
+    "en": "🔗 Expanding citation network (snowballing) from top-{seeds} seed works via OpenAlex references + cited_by (max {max_per_seed} per seed)...",
+    "zh": "🔗 正在通过 OpenAlex 引用网络扩展（滚雪球）——从 top-{seeds} 种子文献的 references + cited_by 扩展（每种子最多 {max_per_seed} 篇）..."
+  },
+  "snowball.done": {
+    "en": "✅ Snowball added {added} works from citation network (seeds: {seeds}, deduped against existing corpus).",
+    "zh": "✅ 滚雪球从引用网络新增 {added} 篇（种子数：{seeds}，已对现有语料去重）。"
+  },
+  "snowball.empty": {
+    "en": "⚠️ Snowball returned no additional works (seeds may have few references / cited_by in OpenAlex).",
+    "zh": "⚠️ 滚雪球未返回新增文献（种子文献在 OpenAlex 的 references / cited_by 可能较少）。"
+  },
+  "snowball.skipped": {
+    "en": "Snowball skipped (use --snowball to enable citation-network expansion).",
+    "zh": "滚雪球已跳过（使用 --snowball 启用引用网络扩展）。"
+  },
+  "interactive.confirm_search": {
+    "en": "🔎 Search strategy confirmed. Proceeding with literature retrieval...",
+    "zh": "🔎 搜索策略已确认，开始文献检索..."
+  },
+  "interactive.confirm_screening": {
+    "en": "✅ Screening confirmed. Borderline cases logged for audit.",
+    "zh": "✅ 筛选已确认，边界案例已记录审计。"
+  },
+  "interactive.paused": {
+    "en": "⏸️ Paused for your confirmation. Review the search strategy above and confirm to proceed.",
+    "zh": "⏸️ 已暂停等待确认。请审阅上述搜索策略后确认继续。"
+  },
+  "report.first.skeleton": {
+    "en": "📝 Report-first mode: skeleton emitted, evidence will fill in progressively...",
+    "zh": "📝 Report-first 模式：已输出报告骨架，证据将逐步填充..."
+  },
   "run.est.all": {
     "en": "1–4 min",
     "zh": "1–4 分钟"
@@ -994,5 +1030,25 @@
   "error.dependency_fatal": {
     "en": "[ct-advisor][FATAL] refiner dependency missing: this issue will NOT silently fall back; install per the command below and retry.\n     {cmd}",
     "zh": "[ct-advisor][FATAL] 精校依赖缺失：此问题不会静默回退；请按以下命令安装后重试。\n     {cmd}"
+  },
+  "suggest.few_results_prefix": {
+    "en": "⚠️ Only {n} unique works found. Consider these options to expand your search:",
+    "zh": "⚠️ 仅找到 {n} 篇唯一文献。建议以下扩展检索选项："
+  },
+  "suggest.snowball": {
+    "en": "Enable snowball citation-network expansion (+20-40% coverage, zero cost): --snowball",
+    "zh": "启用滚雪球引文网络扩展（+20~40% 覆盖率，零成本）：--snowball"
+  },
+  "suggest.deep": {
+    "en": "Use deep search budget (~100 works + rescue): --depth deep",
+    "zh": "使用深度检索预算（~100 篇 + 救援）：--depth deep"
+  },
+  "suggest.pico": {
+    "en": "Add structured PICO concepts for precise matching: --concept TYPE=VALUE",
+    "zh": "添加结构化 PICO 概念精确匹配：--concept TYPE=VALUE"
+  },
+  "suggest.rare_disease": {
+    "en": "Use rare-disease specific sources (Orphanet/OMIM/ClinVar): rare_disease tool",
+    "zh": "使用罕见病专源检索（Orphanet/OMIM/ClinVar）：rare_disease 工具"
   }
 }

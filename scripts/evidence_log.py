@@ -21,7 +21,8 @@ import os
 from datetime import datetime
 
 
-def build_log(payloads, topic, meta, verification_summary, config=None, degraded=None):
+def build_log(payloads, topic, meta, verification_summary, config=None, degraded=None,
+              disabled_sources=None, concepts=None, depth=None, search_topic=None):
     """payloads: list of {source, query, works, ...} (or None).
     config: dict of run-time configuration recorded for audit, e.g.
         {"openalex_key": "configured" | "missing", "openalex_key_url": "https://..."}.
@@ -30,9 +31,13 @@ def build_log(payloads, topic, meta, verification_summary, config=None, degraded
     degraded: list of per-source degradation notes (rate-limit / fetch failure), each
         {"source", "status", "message_zh", "message_en"} — surfaced so a failed source is
         documented, not silently swallowed.
-    Returns the evidence-log dict (topic / generated_at / config / degraded / sources / verification)."""
+    disabled_sources: list of source display names explicitly turned OFF by flags — recorded
+        as status="skipped" (not_run) so their absence is HONEST, never zeroed into the count.
+    concepts / depth / search_topic: retrieval-structure-model audit (组小学借鉴, 2026-09-30).
+    Returns the evidence-log dict with a four-state source ledger + coverage verdict."""
     meta = meta or {}
     sources = []
+    # 1) actually-attempted sources: ok (count>0) / empty (count==0 but ran)
     for p in payloads:
         if not p:
             continue
@@ -50,11 +55,52 @@ def build_log(payloads, topic, meta, verification_summary, config=None, degraded
             "retrieved_at": datetime.now().isoformat(timespec="seconds"),
             "status": "ok" if cnt else "empty",
         })
+    # 2) failed sources (rate-limit / error): status="error" — never collapsed to zero
+    _errored = set()
+    for d in (degraded or []):
+        _errored.add(d.get("source"))
+        sources.append({
+            "source": d.get("source"),
+            "query": None,
+            "review_type": None, "year_from": None, "year_to": None,
+            "safety": None, "count": 0,
+            "retrieved_at": datetime.now().isoformat(timespec="seconds"),
+            "status": d.get("status") or "error",
+        })
+    # 3) explicitly-disabled sources: status="skipped" (not_run) — honest gap, not zeroed
+    for s in (disabled_sources or []):
+        if s in _errored:
+            continue
+        sources.append({
+            "source": s, "query": None,
+            "review_type": None, "year_from": None, "year_to": None,
+            "safety": None, "count": 0,
+            "retrieved_at": datetime.now().isoformat(timespec="seconds"),
+            "status": "skipped",
+            "note": "disabled (flag off) — not_run, count NOT zeroed",
+        })
+    # ---- coverage verdict (组小学 audit: a critical lane failure must be reported,
+    # never broadened into a false-negative conclusion) ----
+    _attempted = [s for s in sources if s["status"] in ("ok", "empty", "error")]
+    if not _attempted:
+        coverage = "no_sources"
+    elif any(s["source"] == "OpenAlex" and s["status"] == "error" for s in sources):
+        coverage = "critical_gap"      # primary source failed
+    elif any(s["status"] == "error" for s in _attempted):
+        coverage = "partial"           # some sources failed, primary alive
+    elif all(s["status"] == "empty" for s in _attempted):
+        coverage = "empty"             # all ran but zero hits
+    else:
+        coverage = "healthy"
     return {
         "topic": topic,
+        "search_topic": search_topic,
+        "depth": depth,
+        "concepts": concepts or [],
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "config": config or {},
         "degraded": degraded or [],
+        "coverage": coverage,
         "sources": sources,
         "verification": verification_summary or {},
     }
@@ -74,6 +120,28 @@ def render_md(log):
         if key_status == "missing" and cfg.get("openalex_key_url"):
             lines.append("  > ⚠️ 未配置 OpenAlex API key：当前以 keyless 模式运行（限 100 次/天，易触发 HTTP 429）。"
                          "建议申请免费 key 后写入技能目录 `.env`（`OPENALEX_API_KEY=<key>`）：%s" % cfg["openalex_key_url"])
+    # ---- 检索结构模型审计（组小学借鉴，2026-09-30）----
+    if log.get("depth"):
+        lines.append("- **Depth / 检索深度**: %s" % log["depth"])
+    if log.get("search_topic") and log.get("search_topic") != log.get("topic"):
+        lines.append("- **Search topic / 实际检索式**: %s" % log["search_topic"])
+    _cov = log.get("coverage")
+    if _cov:
+        _cov_label = {
+            "healthy": "✅ healthy（关键源均命中）",
+            "partial": "⚠️ partial（有源失败，主源存活，结论可框定）",
+            "empty": "⚠️ empty（全部跑通但零命中）",
+            "critical_gap": "🚫 critical_gap（主源 OpenAlex 失败，证据缺口，勿外推）",
+            "no_sources": "— 无数据源",
+        }
+        lines.append("- **Coverage / 覆盖判定**: %s" % _cov_label.get(_cov, _cov))
+    _cons = log.get("concepts") or []
+    if _cons:
+        lines.append("- **Concepts / 结构化概念**:")
+        for c in _cons:
+            lines.append("  - `%s` = %s（MeSH=%s, %s）" % (
+                c.get("type"), c.get("input"), c.get("mesh_label") or "—",
+                c.get("mapping_status")))
     deg = log.get("degraded") or []
     if deg:
         lines.append("")

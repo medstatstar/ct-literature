@@ -46,6 +46,8 @@
 | `--with-arxiv` | ❌ | off | "是否纳入 arXiv 预印本？" |
 | `--with-guidelines` | ❌ | off | "是否叠加临床指南本地语料库（12+ 源，零联网）？" |
 | `--verify` | ❌ | all | "检索后做引用验证吗？（`all`/`top` 防幻觉，P0，耗时增加；默认开）" |
+| `--depth` | ❌ | —（旧 `--max`） | "检索深度预算？quick=快速定位 / standard=标准（默认档位）/ deep=广覆盖。决定每源上限与是否弱化结果救援（非证据质量评级）" |
+| `--concept` | ❌ | — | "结构化 PICO 概念（可重复）？如 `--concept intervention=osimertinib --concept comparator=chemotherapy --concept outcome=overall-survival`，干预/对照/结局分轴，做 MeSH 归一化审计" |
 
 > 数据源：OpenAlex（主源，免 key）+ Europe PMC（默认开，含预印本 SRC:PPR）+ bioRxiv/medRxiv（默认开，预印本直连）+ Semantic Scholar（引用增强）+ arXiv（预印本，opt-in）+ 指南语料库（本地）。
 
@@ -91,6 +93,8 @@
 | 类型 | {review_type} |
 | 年份 | {year_range} |
 | 安全性 | {safety} |
+| 检索深度 | {depth} |
+| 结构化概念 | {concepts} |
 | 数据源 | {sources} |
 | 每源上限 | {max} |
 | 引用验证 | {verify} |
@@ -183,7 +187,7 @@
   2. {title_2}（{cited_2} 次）
   3. {title_3}（{cited_3} 次）
 
-## 当前检索设定：topic={topic} | type={review_type} | year={year_range} | safety={safety} | sources={sources} | max={max} | verify={verify}
+## 当前检索设定：topic={topic} | type={review_type} | year={year_range} | safety={safety} | depth={depth} | concepts={concepts} | sources={sources} | max={max} | verify={verify}
 
 后续操作：
 1. 📄 查看完整报告（HTML / xlsx / bib）

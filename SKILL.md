@@ -3,7 +3,7 @@ slug: ct-literature
 name: ct-literature
 displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
-version: 1.1.3
+version: 1.2.0
 invocable: true
 summary: 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。无key亦可使用。
 license: MIT
@@ -71,6 +71,18 @@ Tier matrix, data-protection split, audit notes → [references/capabilities.md]
 Core: topic/drug/disease search · review-type & year filters · safety/CSM tagging · multi-source merge+dedupe · citation ranking · MeSH/concepts/funders · structured output (JSON/MD/Excel) · retry+backoff · safe link rendering · citations BibTeX/RIS · PRISMA funnel · doc-type exclusion (`--original-only` / `--only-type`, bidirectional) · relevance scoring · Obsidian/Zotero.
 Anti-hallucination: **P0 citation verification** (`--verify`, §17.1) · **P1 DOI audit** (`--verify-dois`) · **P0 evidence provenance log**.
 Full capability table (per-feature flags & semantics) → [references/capabilities.md](references/capabilities.md).
+
+### Retrieval structure model (2026-09-30, adapted from the 组小学 expert · P0/P1)
+
+Ported 组小学's (tencent-lit-search) auditable retrieval structure to ct-literature — all **additive, backward-compatible** (no new flag = identical old behavior):
+
+- **Structured PICO concepts `--concept TYPE=VALUE`** (repeatable): `TYPE∈{condition,population,intervention,comparator,outcome,endpoint,study_design,biomarker,drug,indication}`. Concepts are AND-combined into the query, with intervention / comparator / outcome on separate axes (no longer all crammed into `--topic`); each concept is MeSH-normalized and its `mapping_status` recorded (`exact_label` / `synonym` / `unmapped_literal`; fuzzy matches are rejected and literal terms are never fabricated).
+- **Retrieval depth budget `--depth quick|standard|deep`**: per-source cap + whether to trigger weak-result rescue (`quick` never rescues; `standard`/`deep` do). Not an evidence-quality rating.
+- **Evidence-dimension lane**: each merged record gets `evidence_dimension` (= `safety` if `is_safety`, else `general`); `--safety` plans a dedicated safety lane so safety signals are not diluted by efficacy records. SAFE PREVIEW prints the **lane plan view** (purpose / source / evidence_dimension / notes) for pre-run review.
+- **Four-state audit ledger + coverage verdict**: evidence-log adds `status∈{ok,empty,error,skipped}` and `coverage∈{healthy,partial,empty,critical_gap}`; explicitly-disabled sources are logged as `skipped` (not_run); gaps are surfaced honestly, never zeroed; OpenAlex failure → `critical_gap` with a warning against extrapolation.
+- **Weak-result rescue (P1-6)**: when `standard`/`deup` and unique merged works < 5 and concepts had narrowed the query, automatically re-run with a broader query (topic only); single-shot, non-fatal; logs `skipped` if nothing new is added.
+
+> What is NOT ported: 组小学's 7-scenario exhaustive set / first-class trial·drug·target objects / target-gene-variation entities — these fall outside ct-literature's clinical-literature scope and would overlap with ct-registry / ct-safety, so they are deliberately excluded.
 
 ## Unified work schema
 

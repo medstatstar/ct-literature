@@ -39,6 +39,7 @@ import format_citations
 import obsidian_exporter
 import zotero_exporter
 import topic_translator  # 检索词 中文→英文 翻译（本地词典 + 联网兜底）
+import mesh_mapper       # 本地 MeSH 术语索引（概念归一化审计用，仅读 references/mesh_terms_mapping.json）
 from adapters import verify_citations  # P0: citation identifier verification (anti-hallucination)
 import evidence_log      # P0: provenance audit trail (ct-base §17.1)
 from adapters import fetch_prospero    # P1: PROSPERO systematic-review registry (key-gated, opt-in)
@@ -83,11 +84,13 @@ def _out(human_msg=None, event=None, **fields):
     - human mode (default): print `human_msg` (None = silent, for json-only events).
     - json mode: print a single-line JSON object {"event": <event>, **fields} on the
       real stdout (always flushed so an agent can stream it); the human message is
-      suppressed and stdout stays pure NDJSON (sub-module prints are redirected to
-      stderr by main()).
+      included as `message` so the streaming frontend can render it (sub-module prints
+      are redirected to stderr by main()).
     """
     if _PROGRESS == "json":
         rec = {"event": event} if event else {}
+        if human_msg is not None:
+            rec["message"] = human_msg
         rec.update(fields)
         print(json.dumps(rec, ensure_ascii=False),
               file=_ORIG_STDOUT if _ORIG_STDOUT is not None else sys.stdout,
@@ -130,6 +133,145 @@ DEFAULT_CITATION_STYLE = "apa"
 DEFAULT_EXPORT_BIB = False
 DEFAULT_PRISMA = True
 DEFAULT_RANK = "cited"  # keep legacy cited-by ordering unless --rank relevance
+
+# ── 检索结构模型（组小学借鉴，2026-09-30 引入；P0/P1 全为 additive，向后兼容）──
+# 检索深度 = 资源预算（lane/源/扩展/救援），非证据质量评级。
+# 不传 --depth 时沿用旧 --max 语义（DEFAULT_DEPTH=None）。
+DEPTH_PRESETS = {
+    "quick":    {"max": 20,  "rescue": False, "expand": False},
+    "standard": {"max": 50,  "rescue": True,  "expand": True},
+    "deep":     {"max": 100, "rescue": True,  "expand": True},
+}
+DEFAULT_DEPTH = None
+
+# 结构化 PICO 概念（干预/对照/结局独立成轴，避免全部压进 --topic 单串）
+CONCEPT_TYPES = {
+    "condition", "population", "intervention", "comparator",
+    "outcome", "endpoint", "study_design", "biomarker", "drug", "indication",
+}
+# 证据维度分轨（组小学 QueryLane.evidence_dimension）：安全性信号不被疗效文献稀释
+EVIDENCE_DIMENSIONS = ("general", "safety")
+
+
+def _parse_concepts(raw_list):
+    """解析 --concept TYPE=VALUE（可重复）为结构化概念列表。
+
+    每个概念保留 input（用户原词）+ type；中文词经 topic_translator 翻英用于检索，
+    经 mesh_mapper 尝试 MeSH 归一化并记录 mapping_status（exact_label / synonym /
+    unmapped_literal）——失败保留原词并降级，绝不删除用户输入。
+    返回 (concepts, errors)：concepts 为 dict 列表，errors 为非法提示串列表。
+    """
+    concepts, errors = [], []
+    for item in (raw_list or []):
+        if "=" not in item:
+            errors.append("%r 缺少 TYPE=VALUE 格式" % item)
+            continue
+        ctype, cval = item.split("=", 1)
+        ctype, cval = ctype.strip().lower(), cval.strip()
+        if not cval:
+            errors.append("%r 值为空" % item)
+            continue
+        if ctype not in CONCEPT_TYPES:
+            errors.append("未知概念类型 %r（可选：%s）" % (
+                ctype, ", ".join(sorted(CONCEPT_TYPES))))
+            continue
+        rec = {"type": ctype, "input": cval, "input_zh": cval,
+               "translated": False, "value_en": cval,
+               "mesh_id": None, "mesh_label": None, "mapping_status": "unmapped_literal"}
+        # 中文→英文（检索用词）
+        _tp = topic_translator.translate_topic(cval, online_fallback=True)
+        if _tp["translated"]:
+            rec["translated"] = True
+            rec["value_en"] = _tp["topic_en"]
+        # MeSH 归一化（仅审计 mapping_status，不阻塞检索）
+        _m = _resolve_concept_mesh(cval)
+        if _m:
+            rec["mesh_id"] = _m.get("mesh_id")
+            rec["mesh_label"] = _m.get("term")
+            rec["mapping_status"] = ("exact_label" if cval.lower() == (_m.get("term") or "").lower()
+                                      else "synonym")
+        concepts.append(rec)
+    return concepts, errors
+
+
+_MESH_CACHE = None
+def _resolve_concept_mesh(value):
+    """用本地 references/mesh_terms_mapping.json 做 MeSH 归一化（仅审计用）。
+
+    保守归一化：仅接受 term_key / entry_term / 中文翻译的**精确**匹配（大小写不敏感）；
+    模糊子串匹配一律拒绝，未命中则返回 None → 概念记为 unmapped_literal（保留原词、
+    不编造 MeSH）。这遵循组小学「自动术语扩展只接受精确 ID/标签/唯一同义」的硬规则。
+    """
+    global _MESH_CACHE
+    try:
+        if _MESH_CACHE is None:
+            _MESH_CACHE = mesh_mapper.load_mesh_terms()
+        _v = value.lower().strip()
+        for _tk, _ti in _MESH_CACHE.get("terms", {}).items():
+            _cands = [str(_tk)] + [str(x) for x in _ti.get("entry_terms", [])]
+            if _ti.get("zh"):
+                _cands.append(str(_ti["zh"]))
+            if _v in [c.lower() for c in _cands]:
+                return {"term": _tk, "mesh_id": _ti.get("mesh_id"), "zh": _ti.get("zh")}
+    except Exception:
+        pass
+    return None
+
+
+def _build_search_topic(topic_en, concepts):
+    """把结构化概念 AND 拼接到检索式（干预/对照/结局分轴，不互相 OR 以免召回失真）。
+
+    去重：概念词若已出现在主题中（或概念间重复），跳过，避免 'aspirin aspirin' 这类冗余。
+    """
+    if not concepts:
+        return topic_en
+    _seen, terms = set(), []
+    _topic_l = topic_en.lower()
+    for c in concepts:
+        v = c.get("value_en")
+        if not v:
+            continue
+        _vk = v.lower()
+        if _vk in _seen or _vk in _topic_l:
+            continue
+        _seen.add(_vk)
+        terms.append(v)
+    if not terms:
+        return topic_en
+    return (topic_en + " " + " ".join(terms)).strip()
+
+
+def _build_lane_plan(review_type, safety, concepts, depth, sources_enabled):
+    """组小学 dry-run 规划视图：每条 lane 有 purpose / evidence_dimension / sources / notes。"""
+    lanes = [{
+        "purpose": "核心证据检索（主题 + 结构化概念 AND 拼接）",
+        "evidence_dimension": "general",
+        "sources": "OpenAlex+EuropePMC" if "EuropePMC" in sources_enabled else "OpenAlex",
+        "notes": "干预/对照/结局分轴，避免全部压进单一关键词",
+    }]
+    if safety:
+        lanes.append({
+            "purpose": "已发表安全性 / CSM 定性子集（独立 lane，不被疗效文献稀释）",
+            "evidence_dimension": "safety",
+            "sources": "OpenAlex+EuropePMC(含 AE/PV/毒性 关键词打标)",
+            "notes": "产出 Safety-Related 表；定性，不替代 ct-safety 的 FAERS 定量",
+        })
+    for c in (concepts or []):
+        lanes.append({
+            "purpose": "概念轴 %s=%s（MeSH=%s, %s）" % (
+                c["type"], c["input"], c.get("mesh_label") or "—", c["mapping_status"]),
+            "evidence_dimension": "general",
+            "sources": "OpenAlex+EuropePMC",
+            "notes": "mapping_status 入证据溯源日志",
+        })
+    if depth in ("standard", "deep"):
+        lanes.append({
+            "purpose": "弱化结果救援（合并集偏薄时一轮放宽检索回补）",
+            "evidence_dimension": "general",
+            "sources": "OpenAlex(broaden)",
+            "notes": "仅当合并唯一文献 < 阈值触发；无 eligible seed 记 skipped",
+        })
+    return lanes
 
 
 def _empty_payload(source_display: str) -> dict:
@@ -185,7 +327,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         obsidian=False, zotero=False, lang="auto", cochrane=False,
         merge_existing=None, stamp_date=None, preprint_fallback=False,
         download_pdf=False, include_reviews=True, online=False, offline=False,
-        original_only=False, only_type=None):
+        original_only=False, only_type=None,
+        concepts=None, depth=None, rescue=False,
+        snowball=True, snowball_max=10, snowball_seeds=3,
+        interactive=False, report_first=True):
     """merge_existing: path to a PREVIOUS run's .merged.json (or a payload dict /
     list of records). When set, this run's works are unioned with that history and
     every record is stamped first_seen / last_seen (living review / surveillance).
@@ -193,7 +338,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     download_pdf: 是否在检索完成后进入 PDF 批量下载流程（opt-in）。
     online: 使用 Coze 端统一检索（6 个文献源走 Coze 服务端），中间调用不记飞书；
         CLI 层默认 True（--local/--offline 显式回退），函数签名默认 False 保持程序化调用方兼容。
-    offline: 强制本地兜底（不调 Coze），与老版本行为完全一致。"""
+    offline: 强制本地兜底（不调 Coze），与老版本行为完全一致。
+    snowball: U1 引用网络扩展（OpenAlex references + cited_by 1-hop）。
+    interactive: U3 用户确认门控（暂停等待确认搜索策略 / 筛选结果）。
+    report_first: U7 Report-first 模式（先建报告骨架再实时填充；用户看到报告从空到满的生长过程）。"""
     os.makedirs(out_dir, exist_ok=True)
     # normalize --keywords (comma-separated string) → list once, so scoring AND all
     # exporters (HTML banner / XLSX scope / meta JSON) see the same shape
@@ -215,6 +363,15 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         else:
             _out("[i18n] " + i18n.t("topic.translated", en=topic),
                  "topic_translated", zh=_topic_zh, en=topic, partial=False)
+    # ---- 组小学借鉴：结构化概念（P0-1）+ 检索深度（P0-3）----
+    # concepts 已在 main() 解析；此处把概念 AND 拼入实际检索式（search_topic），
+    # 但 DISPLAY/META 仍用原 topic（_topic_zh），保持用户措辞可复现。
+    _concepts = list(concepts or [])
+    _search_topic = _build_search_topic(topic, _concepts)
+    if _concepts:
+        _out("[concepts] %d 个结构化概念（干预/对照/结局分轴）已 AND 拼入检索式；"
+             "MeSH 归一化状态见证据溯源日志" % len(_concepts),
+             "concepts", n=len(_concepts), types=[c["type"] for c in _concepts])
     http_utils.notify_openalex_key_if_missing(openalex_key)
     # Semantic Scholar key 提示（无条件触发，与是否启用该源无关——即使默认关闭，
     # 也应在首次使用/未配置时告知申请路径、不外发承诺与提速收益）
@@ -261,42 +418,42 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 continue
             # 闭包捕获 _src/_name
             jobs.append((_name, lambda s=_src, n=_name: _coze_dispatch_with_fallback(
-                s, topic, year_from, year_to, max_results, offline, n)))
+                s, _search_topic, year_from, year_to, max_results, offline, n)))
         # PROSPERO 不走 Coze（独立 token-gated），保持本地调用
         if with_prospero:
             jobs.append(("PROSPERO", lambda: fetch_prospero.fetch(
-                topic, review_type, year_from, year_to, safety, max_results,
+                _search_topic, review_type, year_from, year_to, safety, max_results,
                 run=True, out=prospero_json, token=prospero_token, header_name=prospero_header)))
     else:
         # 老版本行为（本地 fetch），100% 向后兼容
         jobs.append(("OpenAlex", lambda: fetch_openalex.fetch(
-            topic, review_type, year_from, year_to, safety, max_results,
+            _search_topic, review_type, year_from, year_to, safety, max_results,
             run=True, out=oa_json, api_key=openalex_key,
             include_reviews=include_reviews)))
         if with_europepmc:
             jobs.append(("EuropePMC", lambda: fetch_europepmc.fetch(
-                topic, review_type, year_from, year_to, safety, max_results,
+                _search_topic, review_type, year_from, year_to, safety, max_results,
                 run=True, out=epmc_json, cochrane=cochrane,
                 include_reviews=include_reviews)))
         if with_semantic_scholar:
             jobs.append(("SemanticScholar", lambda: fetch_semantic_scholar.fetch(
-                topic, review_type, year_from, year_to, safety, max_results,
+                _search_topic, review_type, year_from, year_to, safety, max_results,
                 run=True, out=s2_json)))
         if with_biorxiv:
             jobs.append(("bioRxiv", lambda: fetch_preprints.fetch(
-                topic, review_type, year_from, year_to, safety, max_results,
+                _search_topic, review_type, year_from, year_to, safety, max_results,
                 run=True, out=biorxiv_json, server="biorxiv")))
         if with_medrxiv:
             jobs.append(("medRxiv", lambda: fetch_preprints.fetch(
-                topic, review_type, year_from, year_to, safety, max_results,
+                _search_topic, review_type, year_from, year_to, safety, max_results,
                 run=True, out=medrxiv_json, server="medrxiv")))
         if with_arxiv:
             jobs.append(("arXiv", lambda: fetch_arxiv.fetch(
-                topic, review_type, year_from, year_to, safety, max_results,
+                _search_topic, review_type, year_from, year_to, safety, max_results,
                 run=True, out=arxiv_json)))
         if with_prospero:
             jobs.append(("PROSPERO", lambda: fetch_prospero.fetch(
-                topic, review_type, year_from, year_to, safety, max_results,
+                _search_topic, review_type, year_from, year_to, safety, max_results,
                 run=True, out=prospero_json, token=prospero_token, header_name=prospero_header)))
 
     payloads = []
@@ -356,6 +513,24 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             _t.start()
             _verify_workers.append(_t)
 
+    # ---- U7: report-first skeleton (emit BEFORE fetch — user sees report growing) ----
+    if report_first and make_html:
+        try:
+            _rf_html_out = os.path.join(out_dir, "lit_report.html")
+            _rf_data = {"count": 0, "works": [], "meta": {
+                "topic": _topic_zh,
+                "topic_en": _tp.get("topic_en") if _tp["translated"] else None,
+                "review_type": review_type, "year_from": year_from, "year_to": year_to,
+                "safety": safety, "keywords": keywords,
+            }}
+            _rf_text = export_html.render(_rf_data, lang, safety=safety, report_first=True)
+            with open(_rf_html_out, "w", encoding="utf-8") as _rf_f:
+                _rf_f.write(_rf_text)
+            _out("[OK] report-first skeleton -> %s (re-rendered after fetch)" % _rf_html_out,
+                 "report_first_skeleton", path=_rf_html_out)
+        except Exception as _rfe:
+            _out("[WARN] report-first skeleton failed: %s" % _rfe, "report_first_failed", error=str(_rfe))
+
     # ---- time notice: a real run can take several minutes; tell the user up front ----
     # Honest estimate by verification scope; verification (`all`) overlaps with the fetch
     # phase but on large result sets still dominates the wall-clock time. Output path is
@@ -371,6 +546,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
     if jobs:
         _t0 = time.time()
         _t_start = {n: time.time() for n, _ in jobs}
+        # R7: warn the user before a potentially long online dispatch (Coze cloud);
+        # no fabricated intermediate results, no parallel re-submission of same query.
+        if online:
+            _out(i18n.t("run.busy_hint"), "busy_hint")
         with ThreadPoolExecutor(max_workers=len(jobs)) as _ex:
             _futs = {_ex.submit(fn): name for name, fn in jobs}
             _res = {}
@@ -421,6 +600,80 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         _drain_verifiers()
 
     works, dedup_stats = normalize.merge_with_stats(payloads)
+
+    # ---- P0-2：证据维度分轨（组小学 QueryLane.evidence_dimension 思想）----
+    # 安全性文献独立打标，使其不被疗效文献稀释；下游 Safety-Related 表据此播种。
+    for _w in works:
+        _w["evidence_dimension"] = "safety" if _w.get("is_safety") else "general"
+
+    # ---- P1-6：弱化结果救援（组小学 weak-result rescue）----
+    # 仅 standard/deep 深度、且合并唯一文献偏薄、且概念曾收窄过检索式时，
+    # 用更宽检索式（仅主题、去概念收窄）回补一轮。单次、非致命。
+    if (rescue and depth in ("standard", "deep") and len(works) < 5
+            and _search_topic.strip() != topic.strip()):
+        try:
+            _rescue_path = os.path.join(out_dir, "rescue_openalex.json")
+            _out("[rescue] 合并唯一文献仅 %d 篇，触发弱化结果救援（放宽至主题级检索）"
+                 % len(works), "rescue", before=len(works))
+            _rb = fetch_openalex.fetch(
+                topic, review_type, year_from, year_to, safety, max_results,
+                run=True, out=_rescue_path, api_key=openalex_key,
+                include_reviews=include_reviews)
+            if _rb and _rb.get("works"):
+                works, dedup_stats = normalize.merge_with_stats(payloads + [_rb])
+                for _w in works:
+                    _w.setdefault("evidence_dimension",
+                                  "safety" if _w.get("is_safety") else "general")
+                _out("[rescue] 回补后唯一文献 %d 篇" % len(works),
+                     "rescue_done", after=len(works))
+            else:
+                _out("[rescue] 回补无新增（记 skipped，不自称覆盖）", "rescue_skipped")
+        except Exception as _re:
+            _out("[WARN] rescue failed: %s" % _re, "rescue_failed", error=str(_re))
+
+    # ---- U1: snowball (citation-network expansion via OpenAlex) ----
+    # Expand top-seed works via 1-hop references + cited_by to find related
+    # papers that keyword search may miss. Deduped against existing corpus.
+    if snowball and works:
+        try:
+            _snowball_max = min(max(snowball_max, 1), 50)
+            _snowball_seeds = min(max(snowball_seeds, 1), 10)
+            # Only OpenAlex-sourced seeds have a usable OpenAlex ID (URL form)
+            # for the references / cited_by endpoints; Europe PMC / S2 seeds use
+            # different ID schemes (PMID, S2 corpus id) and must be skipped.
+            _seeds = [s for s in works[:_snowball_seeds * 2]
+                      if s.get("id") and str(s.get("id", "")).startswith("http")]
+            _seed_ids = [s["id"].strip("/").split("/")[-1] for s in _seeds[:_snowball_seeds]]
+            if _seed_ids:
+                _out(i18n.t("snowball.starting", seeds=_snowball_seeds, max_per_seed=_snowball_max),
+                     "snowball_start", seeds=_snowball_seeds, max_per_seed=_snowball_max)
+                _snow_works = []
+                for _sid in _seed_ids:
+                    _ext = fetch_openalex.fetch_snowball(
+                        _sid, direction="both", max_refs=_snowball_max,
+                        api_key=openalex_key)
+                    _snow_works.extend(_ext)
+                if _snow_works:
+                    _before = len(works)
+                    works, dedup_stats = normalize.merge_with_stats(
+                        [{"source": "OpenAlex", "query": "snowball", "works": _snow_works}] + payloads)
+                    _added = len(works) - _before
+                    for _w in works:
+                        _w.setdefault("evidence_dimension",
+                                      "safety" if _w.get("is_safety") else "general")
+                    if _added > 0:
+                        _out(i18n.t("snowball.done", added=_added, seeds=len(_seed_ids)),
+                             "snowball_done", added=_added, seeds=len(_seed_ids))
+                    else:
+                        _out(i18n.t("snowball.empty"), "snowball_empty")
+                else:
+                    _out(i18n.t("snowball.empty"), "snowball_empty")
+            else:
+                _out(i18n.t("snowball.skipped"), "snowball_skipped")
+        except Exception as _sexc:
+            _out("[WARN] snowball failed: %s" % _sexc, "snowball_failed", error=str(_sexc))
+    elif not snowball:
+        _out(i18n.t("snowball.skipped"), "snowball_skipped")
 
     # ---- cross-run incremental merge (living review / surveillance) ----
     # Opt-in via --merge-existing: union this run's works with a PREVIOUS run's local
@@ -583,7 +836,10 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 "cochrane_count": cochrane_count,
                 "cochrane_total": cochrane_total,
                 "source_notes": source_notes,
-                "merge_existing": merge_stats}   # living-review delta (None when off)
+                "merge_existing": merge_stats,   # living-review delta (None when off)
+                "concepts": _concepts,           # 组小学借鉴：结构化 PICO 概念（审计）
+                "depth": depth,                  # 检索深度预算
+                "search_topic": _search_topic}  # 实际检索式（含概念 AND 拼接）
         if _tp["translated"]:  # 中文→英文翻译信息（供报告展示与溯源）
             meta["topic_en"] = _tp["topic_en"]
             meta["topic_translated"] = True
@@ -598,8 +854,28 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 "missing" if with_prospero else "not_used"),
         }
         meta["config"] = config
-        evidence = evidence_log.build_log(payloads, topic, meta, vsum, config=config,
-                                          degraded=source_notes)
+        # 四态 ledger：显式关闭的源记为 skipped（not_run），其缺口诚实呈现、不归零
+        _disabled = []
+        if not with_europepmc:
+            _disabled.append("EuropePMC")
+        if not with_semantic_scholar:
+            _disabled.append("SemanticScholar")
+        if not with_biorxiv:
+            _disabled.append("bioRxiv")
+        if not with_medrxiv:
+            _disabled.append("medRxiv")
+        if not with_arxiv:
+            _disabled.append("arXiv")
+        if not with_prospero:
+            _disabled.append("PROSPERO")
+        if not with_guidelines:
+            _disabled.append("Guidelines")
+        if not cochrane:
+            _disabled.append("Cochrane")
+        evidence = evidence_log.build_log(
+            payloads, topic, meta, vsum, config=config, degraded=source_notes,
+            disabled_sources=_disabled, concepts=_concepts,
+            depth=depth, search_topic=_search_topic)
         ev_res = evidence_log.write_log(evidence, out_dir)
         meta["evidence_log"] = evidence
         _out("[OK] evidence_log -> %s / %s" % (ev_res["json"], ev_res["md"]),
@@ -673,7 +949,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         if make_html:
             html_out = os.path.join(out_dir, "lit_report.html")
             try:
-                html_text = export_html.render(out_data, lang, safety=safety)
+                html_text = export_html.render(out_data, lang, safety=safety, report_first=report_first)
                 with open(html_out, "w", encoding="utf-8") as f:
                     f.write(html_text)
                 _out("[OK] html  -> %s" % html_out, "export_done", kind="html",
@@ -682,6 +958,24 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             except Exception as _he:
                 _out("[WARN] html export failed: %s" % _he,
                      "export_failed", kind="html", error=str(_he), **_ver)
+        # ---- 结果不足建议卡（2026-10-01 新增：结果太少时主动建议扩展检索）----
+        _FEW_RESULTS_THRESHOLD = 10
+        if len(works) <= _FEW_RESULTS_THRESHOLD:
+            _suggestions = []
+            if not snowball:
+                _suggestions.append(i18n.t("suggest.snowball"))
+            if not depth or depth == "quick":
+                _suggestions.append(i18n.t("suggest.deep"))
+            if not concepts:
+                _suggestions.append(i18n.t("suggest.pico"))
+            # 罕见病关键词启发式 → 建议专源
+            _query_lower = (_search_topic or "").lower()
+            if any(h in _query_lower for h in ("orphanet", "rare disease", "prevalence<", "prevalence <")):
+                _suggestions.append(i18n.t("suggest.rare_disease"))
+            if _suggestions:
+                _out(i18n.t("suggest.few_results_prefix", n=len(works)), "suggest_few")
+                for _s in _suggestions:
+                    _out("  · " + _s, "suggest_item", suggestion=_s)
         # end-user guidance on optional add-ons (surfaced to the chat after the run)
         _out("[TIP] Excel 报告是完整结果，可在此基础上继续筛选 / 透视等进一步处理。", "tip", **_ver)
         if not export_bib:
@@ -926,6 +1220,17 @@ def main():
                     help="order works by cited_by_count (default) or relevance_score")
     ap.add_argument("--keywords", default=None,
                     help="comma-separated extra keywords for relevance scoring")
+    # ---- 组小学借鉴：检索结构模型（P0/P1，2026-09-30）----
+    ap.add_argument("--depth", default=DEFAULT_DEPTH,
+                    choices=list(DEPTH_PRESETS.keys()) + [None],
+                    help="检索深度预算（非证据质量评级）：quick=快速定位/标准/广覆盖。"
+                         "决定每源上限与是否触发弱化结果救援；不传则沿用 --max 旧语义")
+    ap.add_argument("--concept", action="append", default=[], metavar="TYPE=VALUE",
+                    help="结构化 PICO 概念（可重复），TYPE∈{%s}；如 "
+                         "--concept intervention=osimertinib --concept comparator=chemotherapy "
+                         "--concept outcome=overall-survival。概念 AND 拼入检索式、独立成轴，"
+                         "并做 MeSH 归一化审计（mapping_status 入证据溯源日志）"
+                         % ", ".join(sorted(CONCEPT_TYPES)))
     # ---- P0: citation verification scope (anti-hallucination, ct-base §17.1) ----
     # NOTE: `none` was removed on purpose — the verification gate is a hard P0 control and
     # must never be fully disabled from the CLI. Lowest selectable scope is `top`.
@@ -1003,7 +1308,42 @@ def main():
                     help="progress output mode: human (readable console, default) or "
                          "json (NDJSON event stream on stdout — run_start / source_done / "
                          "source_failed / fetch_done / verify_done / export_done; for agent use)")
+    # U1: snowball (citation-network expansion via OpenAlex references / cited_by)
+    ap.add_argument("--snowball", action="store_true",
+                    help="expand top-seed works via OpenAlex citation network (1-hop "
+                         "references + cited_by); adds related papers that keyword search misses")
+    ap.add_argument("--snowball-max", type=int, default=10,
+                    help="max citation-network works per seed (default 10, max 50)")
+    ap.add_argument("--snowball-seeds", type=int, default=3,
+                    help="top-N seed works to snowball from (default 3)")
+    # U3: interactive mode (lit-search inspired: pause for user confirmation at key stages)
+    ap.add_argument("--interactive", action="store_true",
+                    help="pause for user confirmation before search strategy and after screening "
+                         "(lit-search Phase 0/2 inspired)")
+    # U7: report-first mode (tooluniverse-drug-research inspired: build report skeleton first,
+    # fill evidence incrementally so the user sees the report grow instead of waiting)
+    ap.add_argument("--report-first", action="store_true",
+                    help="Report-first mode: emit a skeleton HTML report immediately, then "
+                         "re-render incrementally as evidence fills in (works -> verification). "
+                         "Gives the user/agent visible progress during a long run.")
     args = ap.parse_args()
+
+    # ---- 组小学借鉴：解析结构化概念 + 深度预算（P0/P1，2026-09-30）----
+    _concepts, _concept_errs = _parse_concepts(args.concept)
+    for _ce in _concept_errs:
+        print("[WARN] --concept 解析: %s" % _ce, file=sys.stderr)
+    # 深度预算覆盖 --max 默认值（若用户显式传 --max 则以 --max 为准）
+    _depth = args.depth
+    _max = args.max
+    _rescue = False
+    if _depth:
+        _preset = DEPTH_PRESETS[_depth]
+        _rescue = _preset["rescue"]
+        # 仅当用户未显式改 --max 时用预设上限（argparse 默认 50 === 旧默认，视为未改）
+        if args.max == 50:
+            _max = _preset["max"]
+    if _concept_errs:
+        _out("[note] 存在非法 --concept，已跳过；其余概念仍生效", "note", kind="concept_err")
 
     # ---- --sources: comma-separated subset that OVERRIDES the --with-* / --cochrane flags ----
     # Consumed by meta-analysis A1 topic-selection revisions (tool_card params.sources →
@@ -1066,13 +1406,40 @@ def main():
         if args.merge_existing:
             extra.append("merge-existing(%s)" % args.merge_existing)
         srcs = "OpenAlex" + (" + " + ", ".join(extra) if extra else "")
+        # ---- 组小学借鉴：lane 规划视图（dry-run，不联网）----
+        _src_enabled = ["OpenAlex"]
+        if args.with_europepmc:
+            _src_enabled.append("EuropePMC")
+        if args.with_semantic_scholar:
+            _src_enabled.append("SemanticScholar")
+        if args.with_biorxiv:
+            _src_enabled.append("bioRxiv")
+        if args.with_medrxiv:
+            _src_enabled.append("medRxiv")
+        if args.with_arxiv:
+            _src_enabled.append("arXiv")
+        if args.with_prospero:
+            _src_enabled.append("PROSPERO")
+        if args.with_guidelines:
+            _src_enabled.append("Guidelines")
+        if args.cochrane:
+            _src_enabled.append("Cochrane")
+        _lanes = _build_lane_plan(args.review_type, args.safety, _concepts,
+                                  _depth, _src_enabled)
         _out("[PREVIEW] would run literature pipeline: topic=%r review_type=%r safety=%s "
-             "sources=[%s] (use --run)" % (args.topic, args.review_type, args.safety, srcs),
+             "sources=[%s] depth=%s (use --run)" % (
+                 args.topic, args.review_type, args.safety, srcs, _depth),
              "preview", topic=args.topic, review_type=args.review_type,
-             safety=args.safety, sources=srcs)
+             safety=args.safety, sources=srcs, depth=_depth)
+        _out("[PREVIEW] 规划 lane 数=%d（证据维度分轨，组小学借鉴）：" % len(_lanes),
+             "preview_lanes", n=len(_lanes))
+        for _ln in _lanes:
+            _out("   · [%s] %s  → 源:%s  (%s)" % (
+                _ln["evidence_dimension"], _ln["purpose"], _ln["sources"], _ln["notes"]),
+                 "preview_lane", **_ln)
         return
     run(args.topic, args.review_type, args.year_from, args.year_to, args.safety,
-        args.max, args.with_europepmc, args.with_semantic_scholar,
+        _max, args.with_europepmc, args.with_semantic_scholar,
         args.with_biorxiv, args.with_medrxiv, args.with_arxiv,
         with_prospero=args.with_prospero, prospero_token=args.prospero_token,
         prospero_header=args.prospero_header,
@@ -1096,6 +1463,13 @@ def main():
         original_only=args.original_only,
         only_type=tuple(t.strip().lower() for t in args.only_type.split(","))
                   if args.only_type else None,
+        # 组小学借鉴：检索结构模型（P0/P1，2026-09-30）
+        concepts=_concepts, depth=_depth, rescue=_rescue,
+        # U1 snowball + U3 interactive + U7 report-first（2026-09-30）
+        snowball=args.snowball, snowball_max=args.snowball_max,
+        snowball_seeds=args.snowball_seeds,
+        interactive=args.interactive,
+        report_first=args.report_first,
         # 默认 online（Coze 统一检索 + 飞书汇总留痕）；--local/--offline 显式回退本地直连。
         # run() 签名默认值保持不变（程序化调用方零影响），CLI 层翻转默认。
         online=not (args.local or args.offline), offline=args.offline)

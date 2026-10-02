@@ -238,8 +238,69 @@ def _invindex_to_text(inv):
         return ""
 
 
-def fetch(topic, review_type="all", year_from=None, year_to=None,
-          safety=False, max_results=30, run=False, out=None, mailto="dev@example.com",
+def _evidence_level(w):
+    """U4: evidence-level tag for a single work (mirrors normalize._evidence_level)."""
+    st = (w.get("study_type") or "").lower()
+    if st in ("systematic-review", "meta-analysis", "scoping-review"):
+        return "systematic-review"
+    if st == "rct":
+        return "rct"
+    if st == "cohort":
+        return "cohort"
+    if st == "case-report":
+        return "case-report"
+    if st == "case-series":
+        return "case-series"
+    if st == "preprint" or (w.get("type") or "").lower() == "preprint":
+        return "preprint"
+    if st == "review":
+        return "narrative-review"
+    return "other"
+
+
+def fetch_snowball(seed_work_id, direction="both", max_refs=20, api_key=None, mailto="dev@example.com"):
+    """U1: fetch 1-hop references (backward) and/or cited_by (forward) from OpenAlex.
+
+    Snowballing expands a seed work's citation network to find related papers
+    that keyword search may miss. Returns a list of normalized work records.
+
+    Args:
+        seed_work_id: OpenAlex work ID (e.g. "W3087210493")
+        direction: "references" (backward), "cited_by" (forward), or "both"
+        max_refs: max records to retrieve per direction
+        api_key: OpenAlex API key (Bearer)
+        mailto: polite-pool email
+    """
+    if api_key is None:
+        api_key = http_utils.load_openalex_key()
+    headers = http_utils.build_openalex_headers(api_key=api_key, mailto=mailto)
+    collected = []
+
+    for endpoint in ("references", "cited_by"):
+        if direction not in ("both", endpoint):
+            continue
+        page_url = "%s/%s/%s?" % (BASE, seed_work_id.strip("/").split("/")[-1], endpoint)
+        params = {"per-page": min(max_refs, 50), "mailto": mailto}
+        url = page_url + urllib.parse.urlencode(params)
+        try:
+            j = http_utils.get_json(url, headers=headers, timeout=30, max_retries=3)
+        except Exception as e:
+            print("[WARN] snowball %s failed for %s: %s" % (endpoint, seed_work_id, e))
+            continue
+        for rec in j.get("results", [])[:max_refs]:
+            w = _extract(rec)
+            w["study_type"] = _study_type_from(rec, "all")
+            w["is_safety"] = _flag_safety(w)
+            w["snowball_seed"] = seed_work_id
+            w["snowball_direction"] = endpoint
+            w["evidence_level"] = _evidence_level(w)
+            collected.append(w)
+        time.sleep(0.3)
+    return collected
+
+
+def fetch(topic, review_type="all", year_from=None, year_to=None, safety=False,
+          max_results=50, run=False, out=None, mailto="dev@example.com",
           api_key=None, include_reviews=True):
     """Fetch from OpenAlex. When include_reviews=False, the `type:review` filter
     is explicitly added so review-type works are excluded at the source.

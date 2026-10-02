@@ -3,6 +3,17 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.2.0 (2026-10-02) · 默认启用滚雪球 + Report-first；结果不足建议卡；i18n 补全
+
+- **默认启用**：`run()` 默认 `snowball=True`、`report_first=True`（零成本提升覆盖率 + 先出骨架改善 UX）；`f_depth` 默认 `standard`
+- **结果不足建议卡**：`_finalize()` 在 ≤10 篇时主动建议扩展检索（snowball / deep / PICO / 罕见病专源），含罕见病关键词启发式
+- **`_out()` JSON 模式**：携带 `message` 字段，建议文本可经流式到达前端
+- **i18n 新增 5 条双语建议文案**：`suggest.few_results_prefix` / `snowball` / `deep` / `pico` / `rare_disease`
+- **工作台 UI**：`f_snowball` + `f_report_first` 默认 `checked`；流式渲染 `suggest_few` / `suggest_item` 事件（橙色警告 + 斜体建议项）
+- **F19 整改**：SKILL.md 正文中文段翻英文（§4 合规）
+- **shared_sync 整改**：`i18n.py` / `kw_localize.py` 从 ct-base 同步；term_map 4 个光生物调节词条回填 ct-base 后同步
+- **F13 版本对齐**：CHANGELOG 首部新增 v1.2.0
+
 ## v1.1.3 (2026-09-27) · SKILL.md 瘦身至 132 行：三大块外迁 references（零内容删除）
 
 - **动因**：SKILL.md 326 行，超 ct-base §16.1 / spec_lint F02 软上限 200。按用户指示「不删除内容、

@@ -162,10 +162,13 @@ _LOCAL = {
                        "zh": "摘要片段（用于下载前判断相关性）"},
     "f.mesh":          {"en": "MeSH terms (Europe PMC)", "zh": "医学主题词（Europe PMC）"},
     "f.funders":       {"en": "Funding organisations (OpenAlex)", "zh": "资助机构（OpenAlex）"},
+    # ---- source attribution banner (R1: provenance of the retrieval engine) ----
+    "src.banner":       {"en": "Retrieval engine: ct-literature (local + Coze dual-engine; OpenAlex primary)",
+                        "zh": "检索引擎：ct-literature（本地 + Coze 双引擎；OpenAlex 为主源）"},
     # ---- caveat callout (data caveats) ----
     "caveat.title":    {"en": "Data caveats", "zh": "数据局限"},
-    "caveat.text":     {"en": "① OpenAlex is the primary source; Europe PMC / Semantic Scholar are optional enrichments. ② Abstract availability depends on the source (Europe PMC ≈100%, OpenAlex partial). ③ Deduplicated by DOI / title; multi-source works keep provenance. ④ This is published-literature evidence, NOT trial-registry metadata (see ct-registry); the safety subset is qualitative, not FAERS quantitative signal.",
-                       "zh": "① OpenAlex 为主源，Europe PMC / Semantic Scholar 为可选增强；② 摘要可用性取决于来源（Europe PMC ≈100%，OpenAlex 部分缺失）；③ 按 DOI / 标题去重，多源文献保留来源溯源；④ 本表为已发表文献证据，非试验注册信息（见 ct-registry）；安全性子集为定性证据，非 FAERS 定量信号。"},
+    "caveat.text":     {"en": "① OpenAlex is the primary source; Europe PMC / Semantic Scholar are optional enrichments. ② Abstract availability depends on the source (Europe PMC ≈100%, OpenAlex partial). ③ Deduplicated by DOI / title; multi-source works keep provenance. ④ This is published-literature evidence, NOT trial-registry metadata (see ct-registry); the safety subset is qualitative, not FAERS quantitative signal. ⑤ Citation count reflects impact, NOT evidence quality — clinical evidence grade follows study design (RCT / systematic review).",
+                       "zh": "① OpenAlex 为主源，Europe PMC / Semantic Scholar 为可选增强；② 摘要可用性取决于来源（Europe PMC ≈100%，OpenAlex 部分缺失）；③ 按 DOI / 标题去重，多源文献保留来源溯源；④ 本表为已发表文献证据，非试验注册信息（见 ct-registry）；安全性子集为定性证据，非 FAERS 定量信号；⑤ 被引次数仅反映影响力，非证据质量——临床证据等级以研究设计（RCT / 系统评价）为准。"},
     # ---- evidence log (P0: provenance + citation verification, ct-base §17.1) ----
     "sheet.evidence":   {"en": "Evidence Log", "zh": "证据溯源"},
     "ev.title":        {"en": "Evidence Provenance & Citation Verification", "zh": "证据溯源与引文验证"},
@@ -309,6 +312,11 @@ def build_readme(wb, data, fmts):
     rt = meta.get("review_type") or "all"
     kw = meta.get("keywords")
     kw_str = kw if isinstance(kw, str) else (", ".join(str(x) for x in kw) if kw else "—")
+    # R1: standalone retrieval-engine provenance banner in README scope
+    ws.merge_range(r, 0, r, 14, t("src.banner"), fmts["note"])
+    ws.set_row(r, 16)
+    r += 1
+
     scope = [
         (t("scope.topic"), topic_disp or t("col.unknown")),
         (t("scope.filter"), rt),

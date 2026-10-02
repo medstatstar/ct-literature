@@ -60,6 +60,8 @@ python scripts/ct_literature.py --topic "osimertinib" --review-type all \
 | `--with-semantic-scholar` | off | Add Semantic Scholar (citation ranking; 429-degrades) |
 | `--run` | off | **Required** to actually hit the network; otherwise PREVIEW only |
 | `--out-dir` | `./out` | Output directory |
+| `--depth` | —（旧 `--max`） | 检索深度预算 `quick`/`standard`/`deep`：决定每源上限与弱化结果救援（非证据质量评级） |
+| `--concept` | — | 结构化 PICO 概念（可重复）`TYPE=VALUE`，TYPE∈{condition,population,intervention,comparator,outcome,endpoint,study_design,biomarker,drug,indication}；概念 AND 拼入检索式、做 MeSH 归一化审计 |
 
 ## 5. Output files (under `--out-dir`)
 

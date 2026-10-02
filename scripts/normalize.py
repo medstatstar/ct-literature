@@ -168,6 +168,28 @@ _EUROPE_PMC_PREFERRED = {
     "volume", "issue", "page"
 }
 
+def _evidence_level(w):
+    """Assign an evidence-level tag based on study_type / type.
+    U4 (tooluniverse-drug-research inspired): every work gets an explicit
+    evidence grade so reports can show the evidence pyramid at a glance."""
+    st = (w.get("study_type") or "").lower()
+    if st in ("systematic-review", "meta-analysis", "scoping-review"):
+        return "systematic-review"
+    if st == "rct":
+        return "rct"
+    if st == "cohort":
+        return "cohort"
+    if st == "case-report":
+        return "case-report"
+    if st == "case-series":
+        return "case-series"
+    if st == "preprint" or (w.get("type") or "").lower() == "preprint":
+        return "preprint"
+    if st == "review":
+        return "narrative-review"
+    return "other"
+
+
 def merge(payloads):
     """payloads: list of {source, query, works:[...]} dicts (or None).
 
@@ -254,8 +276,13 @@ def merge(payloads):
                     rec["is_safety"] = True
                 if w.get("study_type") and rec.get("study_type") in (None, "article"):
                     rec["study_type"] = w["study_type"]
+                # U4: recompute evidence_level after study_type merge
+                rec["evidence_level"] = _evidence_level(rec)
             else:
                 w["sources"] = [w["source"]]
+                # U4: attach evidence level to every record at birth
+                if "evidence_level" not in w:
+                    w["evidence_level"] = _evidence_level(w)
                 by_key[key] = w
                 order.append(key)
 
