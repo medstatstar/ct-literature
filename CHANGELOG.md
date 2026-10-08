@@ -3,6 +3,74 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.3.0 (2026-10-08) · Docling PDF 结构化解析增强
+
+> 基于《临床试验Skill推荐》分析，新增 Docling 作为 PDF 解析增强层。
+
+- **新增 PDF Parsing Enhancement (Docling) 章节**：`pip install docling` → `DocumentConverter().convert()` 输出带层级结构的 Markdown/JSON
+- **与现有 PDF 流水线互补**：Docling 优先解析（保表格结构），失败时回退到 PyMuPDF/PdfPlumber
+- **适用场景**：CT.gov 方案 PDF、EU-CTR 文档 PDF、OA 全文 PDF 的结构化解析
+
+## v1.2.4 (2026-10-07) · 接入 `entry_point` 调用来源标记（ct-base coze_io_contract §1.3 / §2.3）
+
+> 飞书 searchlog 新增 `entry_point` 独立列，用于按**调用来源**（技能本身 / 工作台 Web 应用 / 未来第三方 API）直切筛选。本技能此前未发送该字段，现按契约补齐。
+
+- **`adapters/fetch_coze_unified.py`**：新增模块级 `_ENTRY_POINT = "skill"` + `set_entry_point(v)` + `entry_point()`（枚举白名单 `skill`/`workbench`/`api`；空值 / 空白 / 非法值一律回退 `"skill"`，绝不写 `None` 或脏值）；`dispatch()` 构造 payload 时在**顶层信封**注入 `"entry_point"`（与 `query_origin` / `skill_version` 同级）。
+- **与 `query_origin` 正交（🔴 不得混用）**：`query_origin` 按机器（COMPUTERNAME SHA-256），同一台机器上 skill 与 workbench 哈希逐字节相同 → 无法区分界面来源。
+- **未改动检索与路由逻辑**：`--force-coze` 早返回、本地 key 直连、`log_only` 留痕等既有行为零变化；`entry_point` 为独立顶层字段，不参与任何条件判断。
+- **同步**：`workbench/publish-dist/adapters/fetch_coze_unified.py` 与主文件逐字节一致（避免发布包携带未实现的旧副本）。
+- **验证**：真实 `dispatch(source, ..., force_coze=True)` 出站 payload 实测带 `entry_point='skill'`；`set_entry_point('workbench')` 后再发即带 `workbench`；非法值 / `None` / 空白均回退 `skill`。既有回归无退化：`regression_stream_parser` 8/8、`regression_force_coze` 24 passed、`regression_root_causes` 24 passed。跨技能契约回归见 `ct-base/scripts/tests/test_entry_point.py`（E1–E9 全通过）。
+
+> ⚠️ 落地前提（§2.3 部署铁律）：**飞书列须先于新 coze 代码存在**。当前 coze 侧尚未写 `entry_point` 键，该列会留空（安全方向：旧 coze + 新表 = 不报错）；coze 侧补齐后本列自动落值。
+
+## v1.2.3 (2026-10-07) · SSE 解析降级路径加固（ct-safety 双发缺陷的跨技能推广）
+
+> 三个技能共用同一 Coze 端点 `ct-search.coze.site/stream_run`。ct-safety 的「每次检索双发」根因（本技能同款形态假设）在本地排查后确认：**本技能当前无双发**，但降级路径存在同类脆弱点，已加固。
+
+**三技能实测结论（同一端点，形态不同）**
+
+| 技能 | 解析器 | `pdf_download` 在技能树内 | 实测结果 |
+|---|---|---|---|
+| ct-safety | `adapters/coze_dispatch.py` | ❌ 无 → import 必失败 | **双发**（已 v0.9.14 修复） |
+| ct-literature | `adapters/fetch_coze_unified.py` | ✅ 有 → 主路径 import 成功 | **无双发**（6 source 实测均单发） |
+| ct-registry | `adapters/search_ictrp.py` | — 独立实现（带 `x-workflow-stream-mode: debug` 头，取 `node_end.output`） | **无双发**（实测 `stream=1, run=0`） |
+
+**本技能实际修复：降级路径能力对齐**
+
+`_parse_stream()` 主路径复用 `adapters/pdf_download._parse_coze_stream`（强解析器，含 `node_end` 回退 + S3 外置回拉）。但 `_parse_stream_local`（import 失败时的降级兜底）仍是旧的弱实现，只认`projects` 键——一旦主路径失效（环境变动/文件缺失），立刻退化为「误判无结果 → 回退 `/run` → 双发」，即 ct-safety 的同一失败模式。修复：降级路径与主路径**能力对齐**。
+
+- **新增 `_fetch_s3_projects()`**：回参超长外置（`s3_url` + 空 `projects`）时回拉真实结果。修复前：静默当「0 篇」；修复后：正常回拉。
+- **`_parse_stream_local` 增补 `node_end` 回退**：`workflow_end.output={}`（Coze Output 变量未绑定）时回退到最后一个含真实结果的 `node_end.output`。修复前返回 `None`（触发 `/run` 回退），修复后正确取回。
+- **增补三种嵌套形态兼容**：`output` / `data.output` / `data.data.output`。
+- **解析器不再互相依赖**：降级路径可独立正确工作，不依赖「主路径一定成功」。
+
+**既有测试盲区（本次补上）**：`tests/regression_root_causes.py` 的 T7/T7c 只测了 `pdf_download._parse_coze_stream`（主路径），**从未测过降级路径** —— 这正是薄弱环节能长期潜伏的原因。
+
+**验证**
+- 新增 `tests/regression_stream_parser.py`（L1–L8，纯离线）：正常 project_list / 空 projects=真 0篇 / `node_end` 回退（含事件顺序颠倒）/ 三种嵌套形态 / S3 顶层与嵌套双位置回拉 / 非文献型 output 不误判 / 分块边界(1/7/64/全文)一致 → **8/8 RC=0**。
+- 真实端点交叉验证：同一份 openalex SSE，`_parse_stream`（主路径）与 `_parse_stream_local`（降级路径）**均返回 50 篇**，结果一致。
+- 真实 dispatch 实测（`force_coze=True` 绕开openalex 本地 key 早返回）：`openalex / europepmc / biorxiv / medrxiv / arxiv` **全部 `stream=1, run=0`**，单次外发。
+- 既有回归无退化：`regression_force_coze.py` 24 passed、`regression_root_causes.py` 24 passed。
+- `workbench/publish-dist/adapters/fetch_coze_unified.py` 已同步（与主文件逐字节一致），避免发布包携带旧解析器。
+
+> ⚠️ 未改动Coze 侧与检索逻辑；`--force-coze` / 本地 key 早返回等既有行为零变化。
+
+## v1.2.2 (2026-10-06) · 工作台安全加固：敏感文件黑名单（P1）+ 路径黑名单（P3）
+
+> 已发布工作台应用（`ct-literature.app.workbuddy.host`）安全加固，阻止敏感数据被 HTTP 下载。
+
+- **`workbench/server.py` + `workbench/publish-dist/workbench/server.py`**：
+  - P1: 新增 `_SENSITIVE_FILES` 文件名黑名单（`drug_name_map.json` / `term_map.json` / `mesh_terms_mapping.json`）。
+  - P3: 新增 `_STATIC_PATH_BLOCKED` 路径黑名单（`adapters`, `out`, `pdfs`, `_bugreports`, `references/guidelines`），阻止目录级访问，返回 403 `forbidden path`。
+- **影响**：适配器代码、PDF 全文、Bug 反馈日志、指南文档无法通过 HTTP 直接访问；`/api/*` 端点不受影响。
+- **回归**：`curl http://127.0.0.1:8787/../adapters/coze_resolve.py` → 403；`curl http://127.0.0.1:8787/../references/guidelines/` → 403。
+
+> 已发布工作台应用（`ct-literature.app.workbuddy.host`）安全加固，阻止敏感映射文件被 HTTP 下载。
+
+- **`workbench/server.py` + `workbench/publish-dist/workbench/server.py`**：新增 `_SENSITIVE_FILES` 文件名黑名单（`drug_name_map.json` / `term_map.json` / `mesh_terms_mapping.json`），即使 `.json` 在扩展名白名单内也拒绝（403）。
+- **影响**：FAERS 药物名映射、MeSH 术语映射、通用术语映射文件无法通过 HTTP 下载；不影响前端读取 `workbench.config.json`。
+- **回归**：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/../references/drug_name_map.json` → 403。
+
 ## v1.2.0 (2026-10-02) · 默认启用滚雪球 + Report-first；结果不足建议卡；i18n 补全
 
 - **默认启用**：`run()` 默认 `snowball=True`、`report_first=True`（零成本提升覆盖率 + 先出骨架改善 UX）；`f_depth` 默认 `standard`

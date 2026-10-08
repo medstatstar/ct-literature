@@ -115,6 +115,32 @@ def _query_origin() -> str:
     return "sha256:" + hashlib.sha256(os.environ.get("COMPUTERNAME", "unknown").encode()).hexdigest()
 
 
+# ── 入口标识 entry_point（ct-base coze_io_contract §1.3 / §2.3 · 2026-10-07）─────
+# 区分「调用来源」：技能本身（"skill"）vs 工作台 Web 应用（"workbench"）vs 未来
+# 第三方 API（"api"）。透传写入飞书**独立列** entry_point，供后台按来源直切筛选。
+#
+# 与 query_origin 的区别（🔴 不得混用）：query_origin 按**机器**（COMPUTERNAME 哈希）
+# 同一台机器上 skill / workbench 算出的哈希逐字节相同 → 无法区分界面来源。
+_ENTRY_POINT = "skill"
+_ENTRY_POINT_WHITELIST = frozenset({"skill", "workbench", "api"})
+
+
+def set_entry_point(value) -> None:
+    """覆盖进程级入口标识（工作台进程启动期调用以标记 workbench）。
+
+    agent / 技能进程**不import** 工作台模块 → 两进程全局值天然隔离、无污染。
+    空值 / 空白 / 非法值一律回退 "skill"，绝不写出 None 或脏值（§1.3）。
+    """
+    global _ENTRY_POINT
+    v = (value or "").strip() if isinstance(value, str) else ""
+    _ENTRY_POINT = v if v in _ENTRY_POINT_WHITELIST else "skill"
+
+
+def entry_point() -> str:
+    """当前进程级入口标识（永不为 None / 空串）。"""
+    return _ENTRY_POINT or "skill"
+
+
 # ── 端点 ──────────────────────────────────────────────────────────────────
 # 主路径 /stream_run（SSE 流式）：2026-09-06 改流式，与 PDF 通道同源 SSE 架构，
 # 避免长检索被网关按单响应超时掐断；流式无结果自动回退 /run（CT_SEARCH_ENDPOINT）。
@@ -307,11 +333,37 @@ def _silent_log(msg):
     return
 
 
+def _fetch_s3_projects(s3_url, log_fn=_silent_log, timeout=60):
+    """回参超长外置时，从 S3 拉回真实 projects。
+
+    ct-search 在结果集过大时把 projects 外置到 S3，只在 output 里回
+    `s3_url` + 空 projects。**必须回拉**，否则会把「有结果」误判成「0 篇」。
+    与 pdf_download._parse_coze_stream 的 s3 分支同构。
+    """
+    log_fn("[coze] 回参超长，从 S3 拉取结果: %s" % s3_url)
+    req = urllib.request.Request(s3_url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+    pl = json.loads(raw.decode("utf-8"))
+    if isinstance(pl, str):
+        pl = json.loads(pl)
+    if isinstance(pl, dict) and isinstance(pl.get("projects"), list):
+        return pl["projects"]
+    return None
+
+
 def _parse_stream(resp, log_fn=_silent_log):
     """解析 Coze stream_run 的 SSE 流，提取检索结果 projects 列表。
 
-    优先复用 scripts/pdf_download.py 的 _parse_coze_stream（PDF 通道已验证的同源实现）；
-    导入异常时降级到本模块内置最小解析器。返回 projects(list[dict]) 或 None。
+    主路径复用本技能树内的 adapters/pdf_download._parse_coze_stream（同源实现，
+    含 node_end 回退 + s3 外置回拉）。该模块**确实存在于 ct-literature 技能树内**
+    （这与 ct-safety 不同——后者树内无此文件，import 必失败而降级到弱解析器，
+    见 ct-safety v0.9.14 CHANGELOG）。
+
+    此处的兜底降级路径仍保留，因为它必须能独立正确工作——不能依赖「主路径一定
+    成功」。故 _parse_stream_local 已与 pdf_download 解析能力对齐（node_end 回退、
+    三种嵌套形态、s3 外置回拉），避免一旦降级就退化为「只认projects 键」而误判
+    无结果 → 回退 /run → 双发。
     """
     try:
         if _SKILL_ROOT not in sys.path:
@@ -343,7 +395,40 @@ def _parse_stream_local(resp, log_fn=_silent_log):
             events.append(json.loads(buf.decode("utf-8", "ignore")))
         except Exception:
             return None
-    final = None
+
+    # 结果提取优先级（与 pdf_download._parse_coze_stream 对齐）：
+    #   workflow_end.output（有真实结果）→ 最后一个含真实结果的 node_end.output
+    #   → 含 projects/project_list 的事件。Coze「Output 变量未绑定」时
+    #   workflow_end.output 为 {}，真结果只在 node_end。
+    def _dig_output(node):
+        if not isinstance(node, dict):
+            return None
+        out = node.get("output")
+        if out is None and isinstance(node.get("data"), dict):
+            out = node["data"].get("output")
+        if (out is None and isinstance(node.get("data"), dict)
+                and isinstance(node["data"].get("data"), dict)):
+            out = node["data"]["data"].get("output")
+        return out
+
+    def _has_real_output(o):
+        if isinstance(o, dict):
+            return any(k in o for k in ("projects", "project_list", "s3_url",
+                                        "status", "total_count"))
+        if isinstance(o, str):
+            try:
+                d = json.loads(o)
+            except Exception:
+                return bool(o) and "[DONE]" not in o
+            return isinstance(d, dict) and any(
+                k in d for k in ("projects", "project_list", "s3_url",
+                                 "status", "total_count"))
+        if isinstance(o, list):
+            return len(o) > 0
+        return False
+
+    workflow_end_out = None
+    node_outputs = []
     for evt in events:
         if not isinstance(evt, dict):
             continue
@@ -351,11 +436,22 @@ def _parse_stream_local(resp, log_fn=_silent_log):
         node = inner if (isinstance(inner, dict) and inner.get("type")) else evt
         etype = node.get("type") or evt.get("type")
         if etype == "workflow_end":
-            out = node.get("output")
-            if out is None and isinstance(node.get("data"), dict):
-                out = node["data"].get("output")
-            if out is not None:
-                final = out
+            workflow_end_out = _dig_output(node)
+        elif etype == "node_end":
+            o = _dig_output(node)
+            if o is not None:
+                node_outputs.append(o)
+
+    final = None
+    if _has_real_output(workflow_end_out):
+        final = workflow_end_out
+    else:
+        for o in reversed(node_outputs):
+            if _has_real_output(o):
+                final = o
+                break
+        if final is None and node_outputs:
+            final = node_outputs[-1]
     if final is None:
         for evt in reversed(events):
             if isinstance(evt, dict) and ("projects" in evt or "project_list" in evt):
@@ -372,8 +468,26 @@ def _parse_stream_local(resp, log_fn=_silent_log):
         return None
     projects = final.get("projects")
     if isinstance(projects, list):
-        return projects
+        if projects:
+            return projects
+        # 空列表：若带 s3_url 说明回参超长外置，须回拉真实数据；
+        # 否则就是「确实 0 篇」。
+        s3 = final.get("s3_url")
+        if s3:
+            try:
+                return _fetch_s3_projects(s3, log_fn)
+            except Exception as e:
+                log_fn("[coze] S3 结果拉取失败: %s" % e)
+                return None
+        return []
     pl = final.get("project_list")
+    s3 = final.get("s3_url")
+    if pl is None and s3:
+        try:
+            pl = _fetch_s3_projects(s3, log_fn)
+        except Exception as e:
+            log_fn("[coze] S3 结果拉取失败: %s" % e)
+            return None
     if pl is not None:
         if isinstance(pl, str):
             try:
@@ -383,7 +497,19 @@ def _parse_stream_local(resp, log_fn=_silent_log):
         if isinstance(pl, dict):
             p = pl.get("projects")
             if isinstance(p, list):
+                if not p and pl.get("s3_url"):
+                    try:
+                        return _fetch_s3_projects(pl["s3_url"], log_fn)
+                    except Exception as e:
+                        log_fn("[coze] S3 结果拉取失败: %s" % e)
+                        return None
                 return p
+            if pl.get("s3_url"):
+                try:
+                    return _fetch_s3_projects(pl["s3_url"], log_fn)
+                except Exception as e:
+                    log_fn("[coze] S3 结果拉取失败: %s" % e)
+                    return None
     return None
 
 
@@ -502,6 +628,9 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
         "log_feishu": log_feishu,
         "query_origin": _query_origin(),
         "skill_version": _skill_version(),
+        # ct-base coze_io_contract §1.3/§2.3：entry_point 顶层信封字段，
+        # 写入飞书独立列 entry_point（不并入 resultstr / querystr）。
+        "entry_point": entry_point(),
         "locale": _resolve_locale(),
         "params": {"user_language": _resolve_locale()},
     }

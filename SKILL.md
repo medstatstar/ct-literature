@@ -3,9 +3,9 @@ slug: ct-literature
 name: ct-literature
 displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
-version: 1.2.0
+version: 1.3.0
 invocable: true
-summary: 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。无key亦可使用。
+summary: 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。集成 Docling PDF 结构化解析。无key亦可使用。
 license: MIT
 description: "Search medical-domain scholarly literature with full data-source coverage (OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize, merge, and de-duplicate the results, produce a qualitative CSM safety-literature subset, and assist in providing open-access (OA) full-text PDF downloads. Usable without a key. / 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。无key亦可使用。"
 triggers:
@@ -24,6 +24,7 @@ metadata:
   authors: ["medstatstar", "phoe-zip"]
   tags: [clinical-trial, literature, evidence, systematic-review, csm, openalex, pubmed, public-data]
   homepage: "https://github.com/medstatstar/ct-literature"
+  pdf_parsing: "Docling (primary) / PyMuPDF / PdfPlumber (fallback)"
 permissions:
   scope: "user-space-only"
   network: "optional"
@@ -123,6 +124,15 @@ See [references/errors.md](references/errors.md) for the full error catalogue (n
 ## Cross-Database Search Mode
 
 A cross-database planning layer (Embase / Cochrane / Web of Science + preprint Tier P, adapted from `multi-database-literature-collector`, AIPOCH MIT) builds search strategy; live fetch still runs the six sources. See [references/multi-db-search.md](references/multi-db-search.md). The **Cochrane** leg is now directly automatable via `--cochrane` (a verified Europe PMC journal filter — identical to meta-analysis's in-skill dedup probe), so CDSR needs no manual browser step.
+
+## PDF Parsing Enhancement (Docling · v1.3.0)
+
+> **Docling** (`github.com/docling-project/docling`）：IBM 开源的文档结构化解析器。方案、IB、CSR 等 PDF 里大量表格，普通解析器一转就散架。Docling 保住表格结构和章节层级，是把法规文档接进 RAG 问答前最关键的一道预处理。
+
+- 安装：`pip install docling`
+- 调用：`DocumentConverter().convert('paper.pdf')` 输出带层级结构的 Markdown/JSON
+- 与现有 PDF 流水线互补：Docling 优先解析（保表格结构），失败时回退到 PyMuPDF/PdfPlumber
+- 适用场景：CT.gov 方案 PDF、EU-CTR 文档 PDF、OA 全文 PDF 的结构化解析
 
 ## Natural-Language Dialogue — Triage-First (mandatory)
 
