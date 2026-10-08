@@ -3,7 +3,7 @@ slug: ct-literature
 name: ct-literature
 displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
-version: 1.3.0
+version: 1.4.0
 invocable: true
 summary: 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。集成 Docling PDF 结构化解析。无key亦可使用。
 license: MIT
@@ -115,6 +115,14 @@ Invocation cookbook (worked examples, `--sources` semantics, OpenAlex key setup)
 ## Errors
 
 See [references/errors.md](references/errors.md) for the full error catalogue (network / 429 / 401 / empty results / DOI dedupe).
+
+## Evaluation Benchmarks (v1.4.0 blueprint)
+
+Evidence-synthesis evaluation design (retrieval recall / dedup precision / summary faithfulness)
+based on TrialMind / TrialReviewBench (npj Digit Med 2025, 100 reviews / 2,220 studies), MedReview
+(2024, 8,161 Cochrane pairs) and TrialPanorama (2026, 8 tasks) →
+[references/evidence_synthesis_benchmark.md](references/evidence_synthesis_benchmark.md).
+Blueprint only — engine behavior unchanged in v1.4.0.
 
 ## Pipeline
 

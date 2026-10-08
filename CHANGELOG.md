@@ -3,6 +3,20 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.4.0 (2026-10-08) · Evidence-synthesis evaluation benchmark blueprint
+
+> Landed from WeChat intel weekly report (wechat_intel_2026-10-08.md).
+
+- **New `references/evidence_synthesis_benchmark.md`**: evaluation design for the
+  retrieval → screening → extraction chain, based on TrialMind / TrialReviewBench
+  (npj Digit Med 2025, doi:10.1038/s41746-025-01840-7; 100 systematic reviews / 2,220
+  clinical studies), MedReview (2024, doi:10.1038/s41746-024-01239-w; 8,161 Cochrane
+  pairs) and TrialPanorama (2026, doi:10.1038/s41746-026-02933-7; 8 tasks).
+- **Suggested regression protocol**: recall@k gate against human-verified gold sets,
+  dedup precision, summary-faithfulness spot checks, per-run auditable report in `out/`.
+- SKILL.md: new "Evaluation Benchmarks (v1.4.0 blueprint)" section; frontmatter 1.3.0 → 1.4.0.
+- Blueprint only — engine behavior unchanged, zero new dependency, no new network path.
+
 ## v1.3.0 (2026-10-08) · Docling PDF 结构化解析增强
 
 > 基于《临床试验Skill推荐》分析，新增 Docling 作为 PDF 解析增强层。
