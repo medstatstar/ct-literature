@@ -37,6 +37,7 @@ mode（2026-09-11 新增）：
   python adapters/fetch_coze_unified.py --source europepmc --keyword "diabetes" --year-from 2020 --run
   python adapters/fetch_coze_unified.py --source biorxiv --keyword "covid" --offline  # 本地兜底
 """
+from datetime import datetime
 import argparse
 import hashlib
 import json
@@ -284,7 +285,8 @@ def _check_outbound_authorization(endpoint: str) -> bool:
 
 # ── 本地兜底（--offline / Coze 不可用）──────────────────────────────────
 def _offline_fallback(source: str, keyword: str, year_from: int = None,
-                      year_to: int = None, max_results: int = 50) -> Optional[Dict]:
+                      year_to: int = None, max_results: int = 50,
+                      date_from: str = None, date_to: str = None) -> Optional[Dict]:
     """Coze 不可用时的本地兜底：调用原有的 fetch_*.py 模块。
 
     返回格式与 Coze 端一致：{"total_count": N, "projects": [...]}
@@ -316,6 +318,10 @@ def _offline_fallback(source: str, keyword: str, year_from: int = None,
         # 统一为本地格式（与 Coze 成功路径一致）：{"source": 规范名, "count", "works"}
         # source 用规范大写；本地 fetch 模块本就返回规范名，此处 display 映射兜底。
         works = result.get("works", [])
+        # 路线 B：本地兜底结果同样按日期窗口裁剪（各 fetch 走 year 级拉取，
+        # 此处统一 clip 保证窗口正确；原生支持 date 的源已在 fetch 内过滤）。
+        works, _dw = clip_by_date_window(works, date_from, date_to, source)
+        _log_date_window(source, _dw, date_from, date_to)
         return {
             "source": _display_source(result.get("source") or source),
             "count": result.get("count", len(works)),
@@ -543,11 +549,93 @@ def _coze_stream_once(body, timeout):
 
 
 # ── 统一外发检索 ──────────────────────────────────────────────────────────
+# ── 月份级日期窗口裁剪（路线 B · 2026-10-12）────────────────────────────
+def _parse_ymd(s):
+    """YYYY-MM-DD (or longer ISO) → datetime.date；缺失/非法 → None。"""
+    if not s:
+        return None
+    s = str(s)[:10]
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except Exception:
+            return None
+    return None
+
+
+def clip_by_date_window(works, date_from=None, date_to=None, source=""):
+    """月份级日期窗口裁剪（online/Coze 通道与 run() 合并兜底共用）。
+
+    规则：
+      - publication_date 有效 → 精确比较 [date_from, date_to]，越界丢弃；
+      - publication_date 缺失/空 → 回退 year 粗兜底：
+          year < date_from.year 或 year > date_to.year → 丢弃；
+          year 落在边界年内（无法判月）→ 保守保留（计 year_fallback）；
+      - year 也没有 → 保守保留（计 no_date，交由下游/用户判断）。
+    返回 (kept_works, stats)；stats = {"dropped":n, "year_fallback":m, "no_date":k}。
+
+    WHY year 兜底：实测 Coze 端 europepmc 节点不填 publication_date（返回空串），
+    仅靠精确日期会漏砍该源的老文；用 year 先砍掉明显跨年的超窗文献，边界年内
+    保守保留（宁多勿漏，交由周报人工判断）。europepmc 精滤需云端工作流升级
+    （消费 date 参数 + 填 publication_date），见 SKILL.md 路线 B 说明。
+    """
+    if not (date_from or date_to) or not isinstance(works, list):
+        return works, {"dropped": 0, "year_fallback": 0, "no_date": 0}
+    df = _parse_ymd(date_from) if date_from else None
+    dt = _parse_ymd(date_to) if date_to else None
+    df_year = df.year if df else None
+    dt_year = dt.year if dt else None
+    kept, dropped, year_fb, no_date = [], 0, 0, 0
+    for w in works:
+        if not isinstance(w, dict):
+            kept.append(w)
+            continue
+        wd = _parse_ymd(w.get("publication_date") or "")
+        if wd is not None:
+            if df and wd < df:
+                dropped += 1
+                continue
+            if dt and wd > dt:
+                dropped += 1
+                continue
+            kept.append(w)
+            continue
+        # 缺精确日期 → year 粗兜底
+        yr = w.get("year")
+        try:
+            yr = int(yr) if yr is not None else None
+        except Exception:
+            yr = None
+        if yr is None:
+            no_date += 1
+            kept.append(w)  # 无年份：保守保留
+            continue
+        if df_year and yr < df_year:
+            dropped += 1
+            continue
+        if dt_year and yr > dt_year:
+            dropped += 1
+            continue
+        year_fb += 1
+        kept.append(w)  # 边界年内，无法判月：保守保留
+    return kept, {"dropped": dropped, "year_fallback": year_fb, "no_date": no_date}
+
+
+def _log_date_window(source, stats, date_from, date_to):
+    """date-window 裁剪日志（仅在有丢弃或 year 兜底时打，避免噪音）。"""
+    if stats["dropped"] or stats["year_fallback"]:
+        print("[coze date-window] %s: dropped=%d year_fallback=%d no_date=%d "
+              "(window [%s, %s])"
+              % (source, stats["dropped"], stats["year_fallback"],
+                 stats["no_date"], date_from, date_to), file=sys.stderr)
+
+
 def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = None,
              max_results: int = 50, run: bool = False, log_feishu: bool = True,
              timeout: int = 300, offline: bool = False,
              querystr: str = None, skillname: str = None,
-             force_coze: bool = False, mode: str = "search") -> Optional[Dict]:
+             force_coze: bool = False, mode: str = "search",
+             date_from: str = None, date_to: str = None) -> Optional[Dict]:
     """统一外发检索，返回结构化结果。
 
     Args:
@@ -597,7 +685,7 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
                 "source": source, "mode": "local", "note": "semantic_scholar 本地直连（有 key 用户，不经 Coze）",
                 "keyword": keyword, "max_results": max_results}, ensure_ascii=False, indent=2))
             return None
-        return _offline_fallback(source, keyword, year_from, year_to, max_results)
+        return _offline_fallback(source, keyword, year_from, year_to, max_results, date_from=date_from, date_to=date_to)
 
     # OpenAlex 本地化（用户决策 2026-09-06，方案 B 同 S2 原则）：有 key 用户本地直连
     # 不经过 Coze——key 零传递 + 进 keyed pool（100k credits/天，无 429），本地
@@ -611,11 +699,11 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
                 "source": source, "mode": "local", "note": "openalex 本地直连（有 key 用户，keyed pool，不经 Coze）",
                 "keyword": keyword, "max_results": max_results}, ensure_ascii=False, indent=2))
             return None
-        return _offline_fallback(source, keyword, year_from, year_to, max_results)
+        return _offline_fallback(source, keyword, year_from, year_to, max_results, date_from=date_from, date_to=date_to)
 
     # 本地兜底
     if offline:
-        return _offline_fallback(source, keyword, year_from, year_to, max_results)
+        return _offline_fallback(source, keyword, year_from, year_to, max_results, date_from=date_from, date_to=date_to)
 
     # 构造 payload
     payload = {
@@ -638,6 +726,13 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
         payload["year_from"] = year_from
     if year_to:
         payload["year_to"] = year_to
+    # 路线 B：月份级日期窗口透传 Coze 端。云端工作流消费后做原生过滤；
+    # 当前云端未消费则被静默忽略（向后兼容，不会报错），由下方拿到结果后的
+    # 客户端 clip_by_date_window 保证窗口正确性。
+    if date_from:
+        payload["date_from"] = date_from
+    if date_to:
+        payload["date_to"] = date_to
     # 审计透传：汇总/标记类调用把统计信息放进 querystr，Coze 端飞书节点原样落库
     if querystr:
         payload["querystr"] = querystr
@@ -663,6 +758,9 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
             # 流式成功：projects 已是从 workflow_end/output 提取的列表（兼容 projects
             # 列表 / project_list 字符串 / 字典三种形态）。total_count 取实际返回条数
             # （检索受 max_results 截断，与 Coze 端 total_count 语义一致）。
+            # 路线 B：拿到结果后按日期窗口裁剪（云端未原生过滤时的正确性保证）。
+            projects, _dw = clip_by_date_window(projects, date_from, date_to, source)
+            _log_date_window(source, _dw, date_from, date_to)
             return {
                 "source": _display_source(source),
                 "count": len(projects),
@@ -681,7 +779,15 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
         req2 = urllib.request.Request(CT_SEARCH_ENDPOINT, data=body, headers=_headers(), method="POST")
         with urllib.request.urlopen(req2, timeout=timeout) as resp2:
             data = json.loads(resp2.read().decode("utf-8"))
-        return _parse_run_response(data, source)
+        parsed = _parse_run_response(data, source)
+        # 路线 B：/run 回退路径同样按日期窗口裁剪（与 stream 路径一致）。
+        if isinstance(parsed, dict) and isinstance(parsed.get("works"), list):
+            _w, _dw = clip_by_date_window(parsed["works"], date_from, date_to, source)
+            _log_date_window(source, _dw, date_from, date_to)
+            parsed["works"] = _w
+            parsed["count"] = len(_w)
+            parsed["total_count"] = len(_w)
+        return parsed
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
         print(f"[Coze] HTTP {e.code}: {err_body[:500]}", file=sys.stderr)
@@ -700,7 +806,8 @@ def dispatch_stream(source: str, keyword: str, year_from: int = None, year_to: i
                     timeout: int = 300, offline: bool = False, querystr: str = None,
                     skillname: str = None, batch_size: int = 5, progress=None,
                     force_coze: bool = False,
-                    mode: str = "search") -> "Generator[List[Dict], None, None]":
+                    mode: str = "search",
+                    date_from: str = None, date_to: str = None) -> "Generator[List[Dict], None, None]":
     """流式检索生成器：把 Coze 返回的 works 按 batch_size 切片，依次 yield 给调用方。
 
     设计（对应「对 coze 的调用改为流式调用，5 个一批依次返回」）：
@@ -723,6 +830,7 @@ def dispatch_stream(source: str, keyword: str, year_from: int = None, year_to: i
     if batch_size < 1:
         batch_size = 1
     result = dispatch(source, keyword, year_from, year_to, max_results,
+                      date_from=date_from, date_to=date_to,
                       run=run, log_feishu=log_feishu, timeout=timeout, offline=offline,
                       querystr=querystr, skillname=skillname, force_coze=force_coze,
                       mode=mode)
@@ -765,6 +873,14 @@ def main():
                     help="流式返回：works 按 --batch-size 切片逐批输出（默认 5 篇/批）")
     ap.add_argument("--batch-size", type=int, default=5,
                     help="--stream 时每批篇数（默认 5）")
+    ap.add_argument("--log-only", action="store_true",
+                    help="仅写飞书审计留痕、不做检索（mode=log_only；隐含 --force-coze）。"
+                         "修复 2026-10-12：此前 main() 引用 args.log_only 但未定义该参数，"
+                         "单独运行 CLI 必 AttributeError。")
+    ap.add_argument("--date-from", default=None, metavar="YYYY-MM-DD",
+                    help="月份级发表日期下界（路线 B，优先于 --year-from）")
+    ap.add_argument("--date-to", default=None, metavar="YYYY-MM-DD",
+                    help="月份级发表日期上界（默认今天）")
     args = ap.parse_args()
 
     # 注入 CLI token
@@ -783,6 +899,8 @@ def main():
             keyword=args.keyword,
             year_from=args.year_from,
             year_to=args.year_to,
+            date_from=args.date_from,
+            date_to=args.date_to,
             max_results=args.max_results,
             run=args.run,
             log_feishu=args.log_feishu,
@@ -803,6 +921,8 @@ def main():
         keyword=args.keyword,
         year_from=args.year_from,
         year_to=args.year_to,
+        date_from=args.date_from,
+        date_to=args.date_to,
         max_results=args.max_results,
         run=args.run,
         log_feishu=args.log_feishu,

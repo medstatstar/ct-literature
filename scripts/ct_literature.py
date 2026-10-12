@@ -30,7 +30,7 @@ from adapters import fetch_europepmc
 from adapters import fetch_semantic_scholar
 from adapters import fetch_preprints
 from adapters import fetch_arxiv
-from adapters.fetch_coze_unified import dispatch as coze_dispatch, DISPATCHABLE_SOURCES
+from adapters.fetch_coze_unified import dispatch as coze_dispatch, DISPATCHABLE_SOURCES, clip_by_date_window
 import normalize
 import export_xlsx
 import export_html
@@ -281,7 +281,8 @@ def _empty_payload(source_display: str) -> dict:
     return {"source": source_display, "count": 0, "works": [], "total_count": 0}
 
 
-def _coze_dispatch_with_fallback(source, keyword, year_from, year_to, max_results, offline, name):
+def _coze_dispatch_with_fallback(source, keyword, year_from, year_to, max_results, offline, name,
+                                 date_from=None, date_to=None):
     """Coze 统一检索 + 本地兜底。
 
     --offline 或 Coze 不可用时自动降级本地 fetch（返回格式已归一化为本地格式：
@@ -291,6 +292,7 @@ def _coze_dispatch_with_fallback(source, keyword, year_from, year_to, max_result
     if offline:
         # 强制本地兜底
         result = coze_dispatch(source, keyword, year_from, year_to, max_results,
+                               date_from=date_from, date_to=date_to,
                                run=True, log_feishu=False, offline=True)
         if result and not result.get("error"):
             return result
@@ -299,6 +301,7 @@ def _coze_dispatch_with_fallback(source, keyword, year_from, year_to, max_result
     # 先尝试 Coze
     try:
         result = coze_dispatch(source, keyword, year_from, year_to, max_results,
+                               date_from=date_from, date_to=date_to,
                                run=True, log_feishu=False)
         if result and not result.get("error"):
             return result
@@ -311,6 +314,7 @@ def _coze_dispatch_with_fallback(source, keyword, year_from, year_to, max_result
 
     # 本地兜底（失败时记飞书一条，暴露降级）
     result = coze_dispatch(source, keyword, year_from, year_to, max_results,
+                           date_from=date_from, date_to=date_to,
                            run=True, log_feishu=True, offline=True)
     return result or _empty_payload(name)
 
@@ -432,7 +436,8 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 continue
             # 闭包捕获 _src/_name
             jobs.append((_name, lambda s=_src, n=_name: _coze_dispatch_with_fallback(
-                s, _search_topic, year_from, year_to, max_results, offline, n)))
+                s, _search_topic, year_from, year_to, max_results, offline, n,
+                date_from=date_from, date_to=date_to)))
         # PROSPERO 不走 Coze（独立 token-gated），保持本地调用
         if with_prospero:
             jobs.append(("PROSPERO", lambda: fetch_prospero.fetch(
@@ -617,28 +622,20 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
 
     works, dedup_stats = normalize.merge_with_stats(payloads)
 
-    # ---- 路线 B：月份级日期窗口客户端兜底裁剪（原生过滤见各 fetch 适配器；
-    #      本裁剪为跨源正确性保证，在线 Coze 通道无法透传日期时亦生效）----
+    # ---- 路线 B：月份级日期窗口客户端兜底裁剪（合并后最终保险）----
+    # 复用 fetch_coze_unified.clip_by_date_window：publication_date 精滤 +
+    # 缺日期回退 year 粗兜底。online（Coze）与 offline 通道均覆盖——dispatch
+    # 已对单源裁过，此处对合并去重后的全集再裁一次兜底（含 europepmc 空日期
+    # 场景：靠 year 先砍跨年超窗，边界年内保守保留交周报人工判断）。
     if date_from or date_to:
-        _df = _parse_date(date_from) if date_from else None
-        _dt = _parse_date(date_to) if date_to else None
-        _kept, _dropped = [], 0
-        for _w in works:
-            _wdt = _parse_date(_w.get("publication_date") or "")
-            if _wdt is None:
-                _kept.append(_w)  # 缺精确日期：保守保留，交由下游/用户判断
-                continue
-            if _df and _wdt < _df:
-                _dropped += 1
-                continue
-            if _dt and _wdt > _dt:
-                _dropped += 1
-                continue
-            _kept.append(_w)
-        works = _kept
-        if _dropped:
-            _out("[date-window] 客户端裁剪掉 %d 篇超出 [%s, %s] 的文献"
-                 % (_dropped, date_from, date_to), "date_window_clip", dropped=_dropped)
+        works, _dw = clip_by_date_window(works, date_from, date_to)
+        if _dw["dropped"] or _dw["year_fallback"]:
+            _out("[date-window] 合并后裁剪：丢弃 %d 篇超窗、%d 篇边界年内缺精确日期"
+                 "（year 兜底保守保留）、%d 篇无日期，窗口 [%s, %s]"
+                 % (_dw["dropped"], _dw["year_fallback"], _dw["no_date"],
+                    date_from, date_to),
+                 "date_window_clip", dropped=_dw["dropped"],
+                 year_fallback=_dw["year_fallback"], no_date=_dw["no_date"])
 
     # ---- P0-2：证据维度分轨（组小学 QueryLane.evidence_dimension 思想）----
     # 安全性文献独立打标，使其不被疗效文献稀释；下游 Safety-Related 表据此播种。

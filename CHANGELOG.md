@@ -3,6 +3,19 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.4.2 (2026-10-12) · online/Coze 通道日期窗口支持（透传 + 客户端裁剪 + year 兜底）
+
+> 用户反馈「切勿用 --online/Coze 模式，直接修改 coze 代码支持即可」——让默认 online 通道也支持月份级日期窗口，而非在调用方规避。
+
+- **dispatch 透传**：`fetch_coze_unified.dispatch()/dispatch_stream()` 加 `date_from/date_to`（置于签名**末尾**，避免位置参数错位——曾因置于第 5/6 位导致 `max_results` 位置传参撞 `date_from` 报 "got multiple values"），非 None 时写入 Coze payload。云端工作流消费后原生过滤；未消费则被静默忽略（向后兼容，不报错）。
+- **dispatch 客户端裁剪**：stream 与 `/run` 回退两条路径拿到结果后均调用 `clip_by_date_window()`，`count/total_count` 取裁剪后数量，打 `[coze date-window]` 日志。`_offline_fallback()` 亦加 date 透传 + 返回前统一裁剪。
+- **共享 `clip_by_date_window(works, date_from, date_to)`**：`publication_date` 精滤；缺失/空回退 year 粗兜底（year 越界砍、边界年内保守保留计 `year_fallback`、无 year 保守保留计 `no_date`）。`ct_literature.run()` 合并兜底改复用此函数（获得 year 兜底能力）。
+- **online 通道接线**：`_coze_dispatch_with_fallback()` 加 `date_from/date_to` 并透传 `coze_dispatch`；`run()` online 分支 job 传 `date_from/date_to`。
+- **修复 CLI bug**：`fetch_coze_unified.main()` 引用 `args.log_only` 但 argparse 未定义 `--log-only`，单独运行必 `AttributeError`；已补定义。新增 `--date-from/--date-to` CLI。
+- **⚠️ 实测结论（online 结构性局限）**：Coze 云端工作流（ct-search.coze.site）**不按日期过滤**，返回相关性排序（多老文）结果并受 `max_results` 截断。实跑 `--recent-months 1`（online）见 openalex dropped=15/15、biorxiv 15/15、medrxiv 14/15 全为超窗老文，裁后近月文献≈0——**客户端裁剪只能砍、补不回被截断挡掉的近期文献**。europepmc 因 Coze 端不填 `publication_date`（返回空串），靠 year 兜底保留 2026 内 12 篇。
+- **根治需云端配合（源码不在本地技能树）**：① Coze 云端工作流消费 payload `date_from/date_to` 在各源 API 层原生日期过滤；② 修复 europepmc 节点填 `publication_date`。两者需在 Coze 平台人工部署。云端升级后，online 客户端已就绪（透传 + 裁剪），自动受益。
+- **验证**：`clip_by_date_window` 单测 9/9 PASS（窗口内 / 越界 / year 兜底 / no_date / 无窗口 passthrough）；online 实跑确认裁剪日志与 year 兜底计数符合预期。
+
 ## v1.4.1 (2026-10-12) · 月份级发表日期窗口（路线 B 原生过滤）
 
 > 来自周报情报自动化需求：仅关注最近 1 个月内「AI + 临床试验」最新论文，年份级 `--year-from` 粒度不够。
@@ -10,8 +23,8 @@ ct- library convention (A-tier public-intel skill — non-confidential input per
 - **新增 CLI 参数** `--date-from YYYY-MM-DD` / `--date-to YYYY-MM-DD` / `--recent-months N`（便捷：最近 N 个月 ≈ 今天-N*30天 起）。三者与 `--year-from/--year-to` 并存，日期级优先于年份级。
 - **原生下推到各源 API（替代年份级 `Jan-1` 粗粒度）**：
   - OpenAlex：`from_publication_date:<date>` / `to_publication_date:<date>`（fetch_openalex.py）
-  - Europe PMC：`filter=pdates:YYYYMMDD-YYYYMMDD`（fetch_europepmc.py，PPR 同源）
-  - preprints：Europe PMC PPR 用 `pdates`；api.biorxiv.org 增量窗口按 `date_from/date_to` 收窄（即便 EPC 无命中也照常拉取，保证日期过滤生效）
+  - Europe PMC：查询子句 `(FIRST_PDATE:[YYYY-MM-DD TO YYYY-MM-DD])`（fetch_europepmc.py，PPR 同源）——🔴 勿用 `filter=pdates:...`，该语法被 API 静默忽略（按索引日期非发表日期过滤，实测放回 2020 年文献）
+  - preprints：Europe PMC PPR 用 `FIRST_PDATE:[...]`；api.biorxiv.org 增量窗口按 `date_from/date_to` 收窄（即便 EPC 无命中也照常拉取，保证日期过滤生效）
 - **跨源兜底**：`run()` 合并归一化后按 `publication_date` 客户端裁剪到 `[date_from, date_to]`，在线 Coze 通道无法透传日期时亦保证不漏出窗口外文献。
 - **向后兼容**：未传日期参数时行为完全不变（年份级 `Jan-1`/`Dec-31` 兜底保留）；`run()` 新参 `date_from/date_to` 默认 None；各 fetch 适配器签名追加带默认值的 `date_from/date_to`，既有调用零影响。
 - **验证**：SAFE PREVIEW 参数解析通过；`--offline --recent-months 1 --run` 实跑确认记录 `publication_date` 落在窗口内、客户端裁剪计数正常。
