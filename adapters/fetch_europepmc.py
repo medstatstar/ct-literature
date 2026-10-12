@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from adapters import http_utils  # shared GET+retry (exponential backoff, 429 Retry-After)
@@ -140,7 +141,7 @@ def _extract(rec):
 
 def fetch(topic, review_type="all", year_from=None, year_to=None,
           safety=False, max_results=30, run=False, out=None, cochrane=False,
-          include_reviews=True):
+          include_reviews=True, date_from=None, date_to=None):
     """Fetch from Europe PMC. When include_reviews=False, append a
     NOT (PUBLICATION_TYPE:"Review" OR "Systematic Review" OR "Meta-Analysis")
     clause to keep review-type publications out of the result set at the
@@ -164,7 +165,11 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
     if safety:
         q += " AND (adverse event OR safety OR toxicity OR case report)"
 
-    if year_from or year_to:
+    if date_from or date_to:
+        lo = date_from if date_from else "1900-01-01"
+        hi = date_to if date_to else datetime.now().strftime("%Y-%m-%d")
+        q += " AND (FIRST_PDATE:[%s TO %s])" % (lo, hi)
+    elif year_from or year_to:
         lo = str(year_from) if year_from else "1900"
         hi = str(year_to) if year_to else "3000"
         q += " AND (PUB_YEAR:[%s TO %s])" % (lo, hi)
@@ -229,6 +234,8 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
         "review_type": review_type,
         "year_from": year_from,
         "year_to": year_to,
+        "date_from": date_from,
+        "date_to": date_to,
         "safety": safety,
         "cochrane": cochrane,
         "hit_count": total_hits,
@@ -250,6 +257,10 @@ def main():
                              "meta-analysis", "rct", "case-report"])
     ap.add_argument("--year-from", type=int)
     ap.add_argument("--year-to", type=int)
+    ap.add_argument("--date-from", default=None, metavar="YYYY-MM-DD",
+                    help="精确发表日期下界（月份级过滤），优先于 --year-from")
+    ap.add_argument("--date-to", default=None, metavar="YYYY-MM-DD",
+                    help="精确发表日期上界（默认今天）")
     ap.add_argument("--safety", action="store_true")
     ap.add_argument("--cochrane", action="store_true",
                     help="restrict to the Cochrane Database of Systematic Reviews "
@@ -264,7 +275,8 @@ def main():
     args = ap.parse_args()
     res = fetch(args.topic, args.review_type, args.year_from, args.year_to,
                 args.safety, args.max, args.run, args.out, cochrane=args.cochrane,
-                include_reviews=args.include_reviews)
+                include_reviews=args.include_reviews, date_from=args.date_from,
+                date_to=args.date_to)
     if res and not args.out:
         print(json.dumps(res, ensure_ascii=False, indent=2))
 

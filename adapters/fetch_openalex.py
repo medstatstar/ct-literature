@@ -301,7 +301,7 @@ def fetch_snowball(seed_work_id, direction="both", max_refs=20, api_key=None, ma
 
 def fetch(topic, review_type="all", year_from=None, year_to=None, safety=False,
           max_results=50, run=False, out=None, mailto="dev@example.com",
-          api_key=None, include_reviews=True):
+          api_key=None, include_reviews=True, date_from=None, date_to=None):
     """Fetch from OpenAlex. When include_reviews=False, the `type:review` filter
     is explicitly added so review-type works are excluded at the source.
 
@@ -328,9 +328,13 @@ def fetch(topic, review_type="all", year_from=None, year_to=None, safety=False,
         # No specific review_type requested (== "all") and reviews excluded →
         # restrict to article-level works to filter out type:review entries.
         filt.append("type:article")
-    if year_from:
+    if date_from:
+        filt.append("from_publication_date:%s" % date_from)
+    elif year_from:
         filt.append("from_publication_date:%d-01-01" % year_from)
-    if year_to:
+    if date_to:
+        filt.append("to_publication_date:%s" % date_to)
+    elif year_to:
         filt.append("to_publication_date:%d-12-31" % year_to)
 
     query = topic
@@ -398,6 +402,8 @@ def fetch(topic, review_type="all", year_from=None, year_to=None, safety=False,
         "review_type": review_type,
         "year_from": year_from,
         "year_to": year_to,
+        "date_from": date_from,
+        "date_to": date_to,
         "safety": safety,
         "count": len(collected),
         "works": collected,
@@ -417,6 +423,10 @@ def main():
                              "meta-analysis", "rct", "case-report"])
     ap.add_argument("--year-from", type=int, help="lower bound publication year")
     ap.add_argument("--year-to", type=int, help="upper bound publication year")
+    ap.add_argument("--date-from", default=None, metavar="YYYY-MM-DD",
+                    help="精确发表日期下界（月份级过滤），优先于 --year-from")
+    ap.add_argument("--date-to", default=None, metavar="YYYY-MM-DD",
+                    help="精确发表日期上界（默认无；与 --date-from 配合做窗口过滤）")
     ap.add_argument("--safety", action="store_true", help="bias toward safety / AE literature")
     ap.add_argument("--max", type=int, default=30, help="max works to retrieve")
     ap.add_argument("--mailto", default="dev@example.com", help="OpenAlex polite-pool email")
@@ -432,7 +442,8 @@ def main():
     args = ap.parse_args()
     res = fetch(args.topic, args.review_type, args.year_from, args.year_to,
                 args.safety, args.max, args.run, args.out, args.mailto, args.openalex_key,
-                include_reviews=args.include_reviews)
+                include_reviews=args.include_reviews, date_from=args.date_from,
+                date_to=args.date_to)
     if res and not args.out:
         print(json.dumps(res, ensure_ascii=False, indent=2))
 

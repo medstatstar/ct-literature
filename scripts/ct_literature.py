@@ -18,6 +18,7 @@ import queue
 import sys
 import threading
 import time
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -314,6 +315,19 @@ def _coze_dispatch_with_fallback(source, keyword, year_from, year_to, max_result
     return result or _empty_payload(name)
 
 
+def _parse_date(s):
+    """Parse YYYY-MM-DD (or longer ISO) to a date object; None if missing/invalid."""
+    if not s:
+        return None
+    s = str(s)[:10]
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except Exception:
+            return None
+    return None
+
+
 def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         max_results=50, with_europepmc=True, with_semantic_scholar=False,
         with_biorxiv=True, with_medrxiv=True, with_arxiv=False,
@@ -330,7 +344,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         original_only=False, only_type=None,
         concepts=None, depth=None, rescue=False,
         snowball=True, snowball_max=10, snowball_seeds=3,
-        interactive=False, report_first=True):
+        interactive=False, report_first=True, date_from=None, date_to=None):
     """merge_existing: path to a PREVIOUS run's .merged.json (or a payload dict /
     list of records). When set, this run's works are unioned with that history and
     every record is stamped first_seen / last_seen (living review / surveillance).
@@ -429,12 +443,12 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         jobs.append(("OpenAlex", lambda: fetch_openalex.fetch(
             _search_topic, review_type, year_from, year_to, safety, max_results,
             run=True, out=oa_json, api_key=openalex_key,
-            include_reviews=include_reviews)))
+            include_reviews=include_reviews, date_from=date_from, date_to=date_to)))
         if with_europepmc:
             jobs.append(("EuropePMC", lambda: fetch_europepmc.fetch(
                 _search_topic, review_type, year_from, year_to, safety, max_results,
                 run=True, out=epmc_json, cochrane=cochrane,
-                include_reviews=include_reviews)))
+                include_reviews=include_reviews, date_from=date_from, date_to=date_to)))
         if with_semantic_scholar:
             jobs.append(("SemanticScholar", lambda: fetch_semantic_scholar.fetch(
                 _search_topic, review_type, year_from, year_to, safety, max_results,
@@ -442,11 +456,13 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
         if with_biorxiv:
             jobs.append(("bioRxiv", lambda: fetch_preprints.fetch(
                 _search_topic, review_type, year_from, year_to, safety, max_results,
-                run=True, out=biorxiv_json, server="biorxiv")))
+                run=True, out=biorxiv_json, server="biorxiv",
+                date_from=date_from, date_to=date_to)))
         if with_medrxiv:
             jobs.append(("medRxiv", lambda: fetch_preprints.fetch(
                 _search_topic, review_type, year_from, year_to, safety, max_results,
-                run=True, out=medrxiv_json, server="medrxiv")))
+                run=True, out=medrxiv_json, server="medrxiv",
+                date_from=date_from, date_to=date_to)))
         if with_arxiv:
             jobs.append(("arXiv", lambda: fetch_arxiv.fetch(
                 _search_topic, review_type, year_from, year_to, safety, max_results,
@@ -601,6 +617,29 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
 
     works, dedup_stats = normalize.merge_with_stats(payloads)
 
+    # ---- 路线 B：月份级日期窗口客户端兜底裁剪（原生过滤见各 fetch 适配器；
+    #      本裁剪为跨源正确性保证，在线 Coze 通道无法透传日期时亦生效）----
+    if date_from or date_to:
+        _df = _parse_date(date_from) if date_from else None
+        _dt = _parse_date(date_to) if date_to else None
+        _kept, _dropped = [], 0
+        for _w in works:
+            _wdt = _parse_date(_w.get("publication_date") or "")
+            if _wdt is None:
+                _kept.append(_w)  # 缺精确日期：保守保留，交由下游/用户判断
+                continue
+            if _df and _wdt < _df:
+                _dropped += 1
+                continue
+            if _dt and _wdt > _dt:
+                _dropped += 1
+                continue
+            _kept.append(_w)
+        works = _kept
+        if _dropped:
+            _out("[date-window] 客户端裁剪掉 %d 篇超出 [%s, %s] 的文献"
+                 % (_dropped, date_from, date_to), "date_window_clip", dropped=_dropped)
+
     # ---- P0-2：证据维度分轨（组小学 QueryLane.evidence_dimension 思想）----
     # 安全性文献独立打标，使其不被疗效文献稀释；下游 Safety-Related 表据此播种。
     for _w in works:
@@ -618,7 +657,7 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
             _rb = fetch_openalex.fetch(
                 topic, review_type, year_from, year_to, safety, max_results,
                 run=True, out=_rescue_path, api_key=openalex_key,
-                include_reviews=include_reviews)
+                include_reviews=include_reviews, date_from=date_from, date_to=date_to)
             if _rb and _rb.get("works"):
                 works, dedup_stats = normalize.merge_with_stats(payloads + [_rb])
                 for _w in works:
@@ -1133,6 +1172,12 @@ def main():
                              "meta-analysis", "rct", "case-report"])
     ap.add_argument("--year-from", type=int, help="lower bound publication year")
     ap.add_argument("--year-to", type=int, help="upper bound publication year")
+    ap.add_argument("--date-from", default=None, metavar="YYYY-MM-DD",
+                    help="精确发表日期下界（月份级过滤）；与 --year-from 二选一，优先于年份级")
+    ap.add_argument("--date-to", default=None, metavar="YYYY-MM-DD",
+                    help="精确发表日期上界（默认今天）；与 --date-from 配合做窗口过滤")
+    ap.add_argument("--recent-months", type=int, default=None, metavar="N",
+                    help="便捷开关：仅检索最近 N 个月（≈今天-N*30天 起）；当 --date-from 缺省时生效")
     ap.add_argument("--safety", action="store_true",
                     help="safety / CSM bias (AE, toxicity, case report, PV)")
     ap.add_argument("--max", type=int, default=50, help="max works per source")
@@ -1385,6 +1430,22 @@ def main():
         _ORIG_STDOUT = sys.stdout
         sys.stdout = sys.stderr
 
+    # ---- 路线 B：月份级日期窗口（--recent-months 折算 date_from/date_to）----
+    date_from, date_to = args.date_from, args.date_to
+    if args.recent_months:
+        if args.recent_months <= 0:
+            print("[ERROR] --recent-months 必须为正整数", file=sys.stderr)
+            sys.exit(2)
+        date_to = date_to or datetime.now().date().isoformat()
+        date_from = date_from or (datetime.now() - timedelta(days=30 * args.recent_months)).date().isoformat()
+    for _ds, _name in ((date_from, "--date-from"), (date_to, "--date-to")):
+        if _ds:
+            try:
+                datetime.strptime(_ds, "%Y-%m-%d")
+            except ValueError:
+                print("[ERROR] %s 格式须为 YYYY-MM-DD: %r" % (_name, _ds), file=sys.stderr)
+                sys.exit(2)
+
     if not args.run:
         extra = []
         if args.with_europepmc:
@@ -1470,6 +1531,7 @@ def main():
         snowball_seeds=args.snowball_seeds,
         interactive=args.interactive,
         report_first=args.report_first,
+        date_from=date_from, date_to=date_to,
         # 默认 online（Coze 统一检索 + 飞书汇总留痕）；--local/--offline 显式回退本地直连。
         # run() 签名默认值保持不变（程序化调用方零影响），CLI 层翻转默认。
         online=not (args.local or args.offline), offline=args.offline)

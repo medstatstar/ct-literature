@@ -3,7 +3,7 @@ slug: ct-literature
 name: ct-literature
 displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
-version: 1.4.0
+version: 1.4.1
 invocable: true
 summary: 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。集成 Docling PDF 结构化解析。无key亦可使用。
 license: MIT
@@ -70,6 +70,8 @@ Tier matrix, data-protection split, audit notes → [references/capabilities.md]
 ## Features
 
 Core: topic/drug/disease search · review-type & year filters · safety/CSM tagging · multi-source merge+dedupe · citation ranking · MeSH/concepts/funders · structured output (JSON/MD/Excel) · retry+backoff · safe link rendering · citations BibTeX/RIS · PRISMA funnel · doc-type exclusion (`--original-only` / `--only-type`, bidirectional) · relevance scoring · Obsidian/Zotero.
+- **月份级日期窗口（路线 B，2026-10-12）**：`--date-from YYYY-MM-DD` / `--date-to YYYY-MM-DD` / `--recent-months N` 将发表日期下界**原生下推**到 OpenAlex `from_publication_date`、Europe PMC 与 preprints `pdates` 过滤（替代年份级 `Jan-1` 粗粒度）；`run()` 合并后另有客户端兜底裁剪，保证跨源正确性。用于「仅取最近 N 个月最新论文」。
+
 Anti-hallucination: **P0 citation verification** (`--verify`, §17.1) · **P1 DOI audit** (`--verify-dois`) · **P0 evidence provenance log**.
 Full capability table (per-feature flags & semantics) → [references/capabilities.md](references/capabilities.md).
 
@@ -110,6 +112,7 @@ Full output catalogue, sheet layout, server-side supplement chain, concurrency n
 ## Implementation
 
 Primary entry: `python scripts/ct_literature.py --topic "<query>" [--review-type …] [--year-from …] [--safety] [--cochrane] [--sources "OpenAlex,EuropePMC"] [--with-guidelines] --run --out-dir ./out` (omit `--run` = SAFE PREVIEW). Guidelines corpus build: `python adapters/build_guidelines.py --topic <topic> --run`.
+**日期窗口（路线 B）**：加 `--recent-months 1`（或 `--date-from 2026-09-12 --date-to 2026-10-12`）即仅取最近 1 个月发表；日期级参数优先于年份级 `--year-from`，原生下推到各源 API，合并后客户端兜底裁剪。
 Invocation cookbook (worked examples, `--sources` semantics, OpenAlex key setup) → [references/capabilities.md](references/capabilities.md).
 
 ## Errors

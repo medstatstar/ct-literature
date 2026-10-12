@@ -3,6 +3,19 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.4.1 (2026-10-12) · 月份级发表日期窗口（路线 B 原生过滤）
+
+> 来自周报情报自动化需求：仅关注最近 1 个月内「AI + 临床试验」最新论文，年份级 `--year-from` 粒度不够。
+
+- **新增 CLI 参数** `--date-from YYYY-MM-DD` / `--date-to YYYY-MM-DD` / `--recent-months N`（便捷：最近 N 个月 ≈ 今天-N*30天 起）。三者与 `--year-from/--year-to` 并存，日期级优先于年份级。
+- **原生下推到各源 API（替代年份级 `Jan-1` 粗粒度）**：
+  - OpenAlex：`from_publication_date:<date>` / `to_publication_date:<date>`（fetch_openalex.py）
+  - Europe PMC：`filter=pdates:YYYYMMDD-YYYYMMDD`（fetch_europepmc.py，PPR 同源）
+  - preprints：Europe PMC PPR 用 `pdates`；api.biorxiv.org 增量窗口按 `date_from/date_to` 收窄（即便 EPC 无命中也照常拉取，保证日期过滤生效）
+- **跨源兜底**：`run()` 合并归一化后按 `publication_date` 客户端裁剪到 `[date_from, date_to]`，在线 Coze 通道无法透传日期时亦保证不漏出窗口外文献。
+- **向后兼容**：未传日期参数时行为完全不变（年份级 `Jan-1`/`Dec-31` 兜底保留）；`run()` 新参 `date_from/date_to` 默认 None；各 fetch 适配器签名追加带默认值的 `date_from/date_to`，既有调用零影响。
+- **验证**：SAFE PREVIEW 参数解析通过；`--offline --recent-months 1 --run` 实跑确认记录 `publication_date` 落在窗口内、客户端裁剪计数正常。
+
 ## v1.4.0 (2026-10-08) · Evidence-synthesis evaluation benchmark blueprint
 
 > Landed from WeChat intel weekly report (wechat_intel_2026-10-08.md).

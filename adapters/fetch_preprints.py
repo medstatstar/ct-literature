@@ -273,7 +273,7 @@ def _fetch_bioxiv_api(server, from_date, to_date, topic, max_results=200):
 
 
 def _fetch_epmc_ppr(topic, source_label, review_type, year_from, year_to,
-                    safety, max_results):
+                    safety, max_results, date_from=None, date_to=None):
     """Fetch from Europe PMC PPR with cursorMark pagination + DOI dedup."""
     q = topic
     if review_type == "systematic-review":
@@ -290,7 +290,11 @@ def _fetch_epmc_ppr(topic, source_label, review_type, year_from, year_to,
         q += " AND (adverse event OR safety OR toxicity OR case report)"
     q += " AND SRC:PPR AND publisher:%s" % source_label
 
-    if year_from or year_to:
+    if date_from or date_to:
+        lo = date_from if date_from else "1900-01-01"
+        hi = date_to if date_to else datetime.now().strftime("%Y-%m-%d")
+        q += " AND (FIRST_PDATE:[%s TO %s])" % (lo, hi)
+    elif year_from or year_to:
         lo = str(year_from) if year_from else "1900"
         hi = str(year_to) if year_to else "3000"
         q += " AND (PUB_YEAR:[%s TO %s])" % (lo, hi)
@@ -342,7 +346,8 @@ def _fetch_epmc_ppr(topic, source_label, review_type, year_from, year_to,
 
 
 def fetch(topic, review_type="all", year_from=None, year_to=None,
-          safety=False, max_results=30, run=False, out=None, server="biorxiv"):
+          safety=False, max_results=30, run=False, out=None, server="biorxiv",
+          date_from=None, date_to=None):
     """Fetch preprints from one server (bioRxiv / medRxiv).
 
     Two-stage retrieval:
@@ -358,21 +363,23 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
 
     # ── Stage 1: Europe PMC PPR ──────────────────────────────────────────────
     epmc_results = _fetch_epmc_ppr(topic, source_label, review_type,
-                                   year_from, year_to, safety, max_results)
+                                   year_from, year_to, safety, max_results,
+                                   date_from=date_from, date_to=date_to)
 
     # Build DOI set for dedup in Stage 2
     epmc_dois = {w.get("doi") for w in epmc_results if w.get("doi")}
 
     # ── Stage 2: api.biorxiv.org incremental window ──────────────────────────
-    # Find the most recent date in EPC results; pull API from (that date - 3d) to today.
+    # 基础窗口：EPC 结果里最新日期 - API_WINDOW_DAYS 到今天；若指定 date_from/date_to，
+    # 进一步收窄（date_from 更晚则取 date_from；date_to 更早则取 date_to）。
+    # 即便 EPC 无命中，只要用户给了日期窗口也照常拉取（保证日期过滤生效）。
     api_results = []
-    if epmc_results:
+    if epmc_results or date_from or date_to:
         latest_dates = []
         for w in epmc_results:
             d = w.get("publication_date") or ""
             if not d:
                 continue
-            # Accept both full date (YYYY-MM-DD) and year-only (YYYY)
             try:
                 if len(d) >= 10 and "-" in d[:10]:
                     latest_dates.append(datetime.strptime(d[:10], "%Y-%m-%d"))
@@ -380,20 +387,28 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
                     latest_dates.append(datetime(int(d[:4]), 12, 31))
             except Exception:
                 pass
-        if latest_dates:
-            latest_date = max(latest_dates)
-            api_from = latest_date - timedelta(days=API_WINDOW_DAYS)
-            api_to = datetime.now()
-            print("[INFO] %s: pulling api.biorxiv.org incremental window %s → %s"
-                  % (source_label, api_from.strftime("%Y-%m-%d"),
-                     api_to.strftime("%Y-%m-%d")))
-            api_results = _fetch_bioxiv_api(server, api_from, api_to, topic,
-                                            max_results=max_results)
-            # Filter out DOIs already in EPC results
-            api_results = [w for w in api_results if w.get("doi") not in epmc_dois]
-            if api_results:
-                print("[OK] %s: +%d from api.biorxiv.org (incremental)"
-                      % (source_label, len(api_results)))
+        _base_from = (max(latest_dates) - timedelta(days=API_WINDOW_DAYS)) if latest_dates \
+            else (datetime.now() - timedelta(days=API_WINDOW_DAYS))
+        api_from_dt = _base_from
+        if date_from:
+            _df = datetime.strptime(date_from, "%Y-%m-%d")
+            if _df > api_from_dt:
+                api_from_dt = _df
+        api_to_dt = datetime.now()
+        if date_to:
+            _dt = datetime.strptime(date_to, "%Y-%m-%d")
+            if _dt < api_to_dt:
+                api_to_dt = _dt
+        print("[INFO] %s: pulling api.biorxiv.org incremental window %s → %s"
+              % (source_label, api_from_dt.strftime("%Y-%m-%d"),
+                 api_to_dt.strftime("%Y-%m-%d")))
+        api_results = _fetch_bioxiv_api(server, api_from_dt, api_to_dt, topic,
+                                        max_results=max_results)
+        # Filter out DOIs already in EPC results
+        api_results = [w for w in api_results if w.get("doi") not in epmc_dois]
+        if api_results:
+            print("[OK] %s: +%d from api.biorxiv.org (incremental)"
+                  % (source_label, len(api_results)))
 
     # ── Merge ────────────────────────────────────────────────────────────────
     works = epmc_results + api_results
@@ -404,6 +419,8 @@ def fetch(topic, review_type="all", year_from=None, year_to=None,
         "review_type": review_type,
         "year_from": year_from,
         "year_to": year_to,
+        "date_from": date_from,
+        "date_to": date_to,
         "safety": safety,
         "count": len(works),
         "works": works,
@@ -436,13 +453,18 @@ def main():
                              "meta-analysis", "rct", "case-report"])
     ap.add_argument("--year-from", type=int)
     ap.add_argument("--year-to", type=int)
+    ap.add_argument("--date-from", default=None, metavar="YYYY-MM-DD",
+                    help="精确发表日期下界（月份级过滤），优先于 --year-from")
+    ap.add_argument("--date-to", default=None, metavar="YYYY-MM-DD",
+                    help="精确发表日期上界（默认今天）")
     ap.add_argument("--safety", action="store_true")
     ap.add_argument("--max", type=int, default=30)
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--out")
     args = ap.parse_args()
     res = fetch(args.topic, args.review_type, args.year_from, args.year_to,
-                args.safety, args.max, args.run, args.out, server=args.server)
+                args.safety, args.max, args.run, args.out, server=args.server,
+                date_from=args.date_from, date_to=args.date_to)
     if res and not args.out:
         print(json.dumps(res, ensure_ascii=False, indent=2))
 
