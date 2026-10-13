@@ -10,6 +10,7 @@ ct- library convention (A-tier public-intel skill — non-confidential input per
 - **根因 1（主因）**：`ct_literature.py` 的 `verify_progress` 事件 `_out(None, "verify_progress", done=N)` 第一参为 None → json 流无 `message` 字段；前端 `app.js` 的 progress 分支只渲染 `ev.message||ev.msg` 非空的事件 → **引文验证阶段（全程最长，大结果集可达数分钟）16+ 条进度事件被整段丢弃**，UI 静止。
 - **根因 2（次因）**：`ev.ev==="log"` 类型事件（`[Coze]`/`[INFO]`/`[WARN]` 诊断行）前端无分支，从不展示——长任务期间后端在做事但界面完全静默。
 - **服务端修复**：`verify_progress` 补 human message `⏳ 引文验证 N/M` + `total` 字段（jobs 总数）。
+- **🔧 热修（部署后回归发现，同日闭环）**：初版 `total=len(jobs)` 是**源数**（4）而非待验证文献数（唯一 works，smoke 实测 16）→ 线上出现 `引文验证 16/4` 超调。改为 `total=len(_seen_keys)` 实时大小——验证条目随各源 fetch 完成动态入队（596-598 行），producer put 先于对应 worker 的 `done+=1`，数学上恒有 `done ≤ total`；本地实跑复验 19/19 无超调。
 - **前端修复**（`workbench/app.js` 主管线流）：新增 `verify_progress` 显式渲染分支（有 message 用 message；旧服务端无 message 时用 done/total 兜底拼）；新增 `log` 事件分支，后端诊断行透出（dim 样式）。
 - **覆盖范围**：`/api/search`（对话检索 / 表单检索主管线）全链路——busy_hint（Coze 检索等待提示）→ source_done（各源）→ verify_progress（引文验证，原缺口）→ fetch_done → export_done 全渲染。`/api/lit-stream`（单源流式工具）本就逐批推送且字段自洽（`msg`），不在修复面。
 - **验证**：本地 `--offline --progress json` 实跑，`verify_progress` 输出 `{"event":"verify_progress","message":"⏳ 引文验证 1/4","done":1,"total":4}`；`node --check app.js` + `py_compile ct_literature.py` 双过；publish-dist 重建同步 diff=0。

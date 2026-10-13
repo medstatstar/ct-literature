@@ -497,7 +497,6 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
              % verify_mode,
              "verify_mode", mode=verify_mode)
         _verify_done = 0
-        _verify_total = len(jobs)
         _verify_lock = threading.Lock()
 
         def _verify_worker():
@@ -527,8 +526,12 @@ def run(topic, review_type="all", year_from=None, year_to=None, safety=False,
                 # message 必填：前端（workbench app.js）只渲染带 message 的 progress
                 # 事件，2026-10-13 修复——此前 done=N 无 message，引文验证阶段
                 # （全程最长，可达数分钟）在网页端零进度反馈。
-                _out("⏳ 引文验证 %d/%d" % (_done, _verify_total),
-                     "verify_progress", done=_done, total=_verify_total)
+                # total 取 _seen_keys 实时大小：验证条目随各源 fetch 完成动态入队
+                # （596-598 行），启动时无法预知；producer put 先于对应 worker 的
+                # done+=1，故恒有 done ≤ total（曾误用 len(jobs)=源数，出现 16/4）。
+                _vt = len(_seen_keys)
+                _out("⏳ 引文验证 %d/%d" % (_done, _vt),
+                     "verify_progress", done=_done, total=_vt)
                 _verify_q.task_done()
 
         _vw = min(24, max(1, len(jobs) * 4))  # widened pool; per-host politeness enforced
