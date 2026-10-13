@@ -3,6 +3,17 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.4.7 (2026-10-13) · 网页端长任务进度反馈修复（引文验证阶段 + 诊断行透出）
+
+> 用户反馈「网页对话检索时间较长时，没有提示用户等待的进度信息」。线上回归复盘 NDJSON 流：事件一直齐全（busy_hint / run_start / source_done / verify_progress / fetch_done…），但前端渲染层把它们吃了。
+
+- **根因 1（主因）**：`ct_literature.py` 的 `verify_progress` 事件 `_out(None, "verify_progress", done=N)` 第一参为 None → json 流无 `message` 字段；前端 `app.js` 的 progress 分支只渲染 `ev.message||ev.msg` 非空的事件 → **引文验证阶段（全程最长，大结果集可达数分钟）16+ 条进度事件被整段丢弃**，UI 静止。
+- **根因 2（次因）**：`ev.ev==="log"` 类型事件（`[Coze]`/`[INFO]`/`[WARN]` 诊断行）前端无分支，从不展示——长任务期间后端在做事但界面完全静默。
+- **服务端修复**：`verify_progress` 补 human message `⏳ 引文验证 N/M` + `total` 字段（jobs 总数）。
+- **前端修复**（`workbench/app.js` 主管线流）：新增 `verify_progress` 显式渲染分支（有 message 用 message；旧服务端无 message 时用 done/total 兜底拼）；新增 `log` 事件分支，后端诊断行透出（dim 样式）。
+- **覆盖范围**：`/api/search`（对话检索 / 表单检索主管线）全链路——busy_hint（Coze 检索等待提示）→ source_done（各源）→ verify_progress（引文验证，原缺口）→ fetch_done → export_done 全渲染。`/api/lit-stream`（单源流式工具）本就逐批推送且字段自洽（`msg`），不在修复面。
+- **验证**：本地 `--offline --progress json` 实跑，`verify_progress` 输出 `{"event":"verify_progress","message":"⏳ 引文验证 1/4","done":1,"total":4}`；`node --check app.js` + `py_compile ct_literature.py` 双过；publish-dist 重建同步 diff=0。
+
 ## v1.4.6 (2026-10-13) · 修复网页端 Coze 401（token 模块自包含，v1.4.5 授权门修复的第二层）
 
 > v1.4.5 部署后线上端到端回归实测：AUTH-BLOCK 已消失，但三源仍降级——`[Coze] HTTP 401: Missing authorization header` + `Token 无效或已过期`。授权门放行了，请求却没带 Bearer token 到达 Coze。
