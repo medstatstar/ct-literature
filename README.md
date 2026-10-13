@@ -6,7 +6,7 @@
 <img src="assets/icon.svg" width="240" height="240" alt="ct-literature logo"/>
 </div>
 
-> **No install needed to try it:** if you don't want to install this skill and just want to quickly use its basic features, visit the web app directly at **https://ct.medstatstar.com**.
+> **Works without installation:** If you'd rather not install and just want to quickly use this skill's basic features, you can also visit the ct-series unified web portal **https://ct.medstatstar.com** directly.
 
 > **A `ct-` library skill (A-tier public-intel — non-confidential input) that retrieves published scholarly literature about a drug / disease / method, normalizes multiple public bibliographic sources into one de-duplicated evidence base, and surfaces the evidence landscape plus a CSM (cumulative safety monitoring) qualitative subset.**
 
