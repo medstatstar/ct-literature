@@ -122,8 +122,23 @@ def _query_origin() -> str:
 #
 # 与 query_origin 的区别（🔴 不得混用）：query_origin 按**机器**（COMPUTERNAME 哈希）
 # 同一台机器上 skill / workbench 算出的哈希逐字节相同 → 无法区分界面来源。
-_ENTRY_POINT = "skill"
+# 进程启动期初值来源（2026-10-13 修复）：环境变量 CT_ENTRY_POINT。
+# ct-literature 工作台是 Popen(ct_literature.py) 子进程架构——真正向 coze 发请求的是
+# 子进程，父进程（server.py）里调用 set_entry_point() 无法跨进程传递，历史上因此
+# 全树零调用点、entry_point 恒为默认 "skill"（应用页面调用也落 "skill"）。
+# 现由 server.py 在 Popen env 写 CT_ENTRY_POINT=workbench，本模块加载时读取作初值；
+# agent / 技能进程不设该变量 → 恒为 "skill"。非法值 / 空白一律回退 "skill"（§1.3）。
 _ENTRY_POINT_WHITELIST = frozenset({"skill", "workbench", "api"})
+_ENTRY_POINT_ENV = "CT_ENTRY_POINT"
+
+
+def _entry_point_from_env():
+    """进程启动期从环境变量解析 entry_point 初值（白名单外一律回退 "skill"）。"""
+    v = (os.environ.get(_ENTRY_POINT_ENV) or "").strip()
+    return v if v in _ENTRY_POINT_WHITELIST else "skill"
+
+
+_ENTRY_POINT = _entry_point_from_env()
 
 
 def set_entry_point(value) -> None:
@@ -252,6 +267,19 @@ _SESSION_AUTHORIZED = set()
 _RUNTIME_DIR = os.environ.get("CT_LIT_RUNTIME_DIR") or os.path.join(
     os.path.expanduser("~"), ".workbuddy", "ct-literature-runtime")
 
+# 2026-10-13：部署包内置公开端点白名单（授权门兜底放行）。
+# ct-search / ct-bugreport 的 /run 是作者公开端点（token 为嵌入式公共 token，
+# 2026-08-18 授权），授权门语义只防「未经同意外发到私有端点」。云端部署面
+# （publish-dist 容器）home 无 runtime config.json、发布包亦不随带（避免公开
+# 私有端点），曾致 europepmc / biorxiv / medrxiv 三源全部 AUTH-BLOCK 降级
+# 本地 fetch。公开端点在所有部署面（本机 / CLI / agent / 云端网页端）一律
+# 放行，与「私有端点须显式授权」不冲突；env CT_SEARCH_ENDPOINT 覆盖为其他
+# 端点时仍走 config 授权，原语义不变。
+_BUILTIN_PUBLIC_ENDPOINTS = frozenset({
+    "https://ct-search.coze.site/run",
+    "https://ct-bugreport.coze.site/run",
+})
+
 
 def _config_candidates():
     cands = []
@@ -267,7 +295,11 @@ def _check_outbound_authorization(endpoint: str) -> bool:
 
     脚本只发 [AUTH-BLOCK] 信号，绝不自行修改 config.json。config 解析按
     _config_candidates() 多候选回退，确保移出技能树后仍能在运行态目录命中。
+    公开端点白名单（_BUILTIN_PUBLIC_ENDPOINTS）优先放行——云端部署面无
+    runtime config，见常量处注释（2026-10-13）。
     """
+    if endpoint in _BUILTIN_PUBLIC_ENDPOINTS:
+        return True
     if endpoint in _SESSION_AUTHORIZED:
         return True
     for path in _config_candidates():

@@ -3,6 +3,27 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.4.5 (2026-10-13) · 修复网页端三源 AUTH-BLOCK 降级（授权门内置公开端点白名单）
+
+> 用户报告网页端（publish-dist 云端部署）EuropePMC / medRxiv / bioRxiv 报 `Coze 失败(AUTH-BLOCK)，降级本地 fetch`；本机 agent / CLI 调用从不复现。
+
+- **根因**：`_check_outbound_authorization()` 的三个 config 候选路径（env `CT_LIT_RUNTIME_DIR` > `~/.workbuddy/ct-literature-runtime/config/config.json` > 技能树内 `config/config.json`）在**云端容器**全部落空——runtime config 于 2026-09-06 故意移出技能树（含私有端点、不随发布包公开，CHANGELOG 同日期条目），发布包内无兜底 config → 授权门返回 False → `dispatch()` 返回 `error=AUTH-BLOCK` → `ct_literature.py` 三源降级本地 fetch。该 09-06 决策当时只验证了本机路径，未覆盖云端部署面。
+- **佐证**：OpenAlex 不报是因网页端环境有 `OPENALEX_API_KEY` 走本地直连（绕过授权门）；semantic_scholar 默认关闭。
+- **修复**：`adapters/fetch_coze_unified.py` 新增 `_BUILTIN_PUBLIC_ENDPOINTS` 常量（`ct-search` / `ct-bugreport` 的 `/run`——作者公开端点，token 为 2026-08-18 授权的嵌入式公共 token），`_check_outbound_authorization()` 开头优先放行。授权门语义只防「私有端点外发」，公开端点在所有部署面（本机 / CLI / agent / 云端网页端）放行不冲突；env `CT_SEARCH_ENDPOINT` 覆盖为其他端点时仍走 config 授权，原语义不变。
+- **实证矩阵**（模拟空 home 容器复现云端部署面）：修复前 ct-search `authorized=False`（与现象吻合）；修复后——本机 / 云端模拟两环境 ct-search、ct-bugreport 均 True，私有端点 `https://evil.example.com/run` 两环境均 False（授权门未被削弱）。
+- **同步**：`workbench/publish-dist/adapters/fetch_coze_unified.py` 经 `build_publish.py` 重新构建同步（76 文件、PRUNED 0 stale、与主树 diff=0）；`py_compile` 通过；`tests/regression_force_coze.py` 对该函数为 mock 不受影响。
+- **生效前提**：网页端需重新部署（workbuddy sites deploy 覆盖 `ct-literature.app.workbuddy.host`）后才消除 WARN；未部署前降级路径仍保底出结果。
+
+## v1.4.4 (2026-10-13) · 修复工作台调用 entry_point 恒为 skill（§1.3 接线）
+
+> ct-base coze_io_contract §1.3 工作台接线三架构之「架构 B · Popen 子进程」。v1.4.x 系列只做了注入侧（dispatch payload 带 entry_point），设置侧零接线；本技能工作台是 `server.py → Popen(ct_literature.py)` 子进程架构，父进程 `set_entry_point()` 无法跨进程传递 → 应用页面调用恒落默认值 `skill`。
+
+- **`adapters/fetch_coze_unified.py`**：新增 `_entry_point_from_env()`——模块加载时从环境变量 `CT_ENTRY_POINT` 解析 `_ENTRY_POINT` 初值（白名单 `skill`/`workbench`/`api`，空白/非法一律回退 `skill`）；`set_entry_point()` 运行期覆盖语义不变。
+- **`workbench/server.py`**：两处 `Popen`（`ct_literature.py` 主检索 + `coze_resolve.py` 直链解析，均向 coze 端点发请求）的 `env` 增加 `CT_ENTRY_POINT=workbench`，子进程模块加载即继承工作台身份；agent / 技能 CLI 不设该变量 → 恒 `skill`（无回归）。
+- **同步**：`workbench/publish-dist/adapters/fetch_coze_unified.py`、`workbench/publish-dist/workbench/server.py` 与主文件逐字节一致（diff 验证）。
+- **验证**：`_entry_point_from_env()` 七组用例（workbench/空/空白/evil/大小写变体/api/无变量）全过；payload 默认注入 `skill` 复核通过；`py_compile` 四份副本全过；跨技能契约回归 `ct-base/scripts/tests/test_entry_point.py` E1–E9 全绿。
+- **范式沉淀**：ct-base `references/coze_io_contract.md` §1.3 新增「工作台接线三架构」规范段（A 进程内 import / B Popen env 透传 / C 代理注入），本技能为架构 B 范本之一。
+
 ## v1.4.3 (2026-10-13) · 云端原生日期过滤落地（ct-registry coze 0.3.94 联动 + lit_date_* 契约对齐）
 
 > 用户指认云端代码位置 `ct-registry/adapters/coze`，根治 v1.4.2 遗留的 online 结构性局限：客户端只砍不补、europepmc 空日期。
