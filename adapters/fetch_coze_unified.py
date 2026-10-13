@@ -55,9 +55,19 @@ _ADAPTERS_DIR = os.path.dirname(os.path.abspath(__file__))
 _SKILL_ROOT = os.path.dirname(_ADAPTERS_DIR)
 _CT_REGISTRY_SKILL = os.path.expanduser("~/.workbuddy/skills/ct-registry")
 
-# 确保 ct-registry/adapters 在 sys.path，以便复用 endpoint_token.py
+# 本技能 adapters/ 优先入 path：endpoint_token.py（内嵌公共 token blob）自包含于
+# 本技能包（2026-10-13 v1.4.6 修复）——此前仅把 ct-registry/adapters 入 path，
+# 云端部署容器无 ct-registry 技能树 → import 失败 → token 为空 → Coze 401
+# （线上实测三源 AUTH-BLOCK 修复后仍降级，根因即此）。自包含后本机 / CLI /
+# agent / 云端网页端全部署面一致，与 ct-base / ct-advisor「包内各持一份」范式对齐。
+if _ADAPTERS_DIR not in sys.path:
+    sys.path.insert(0, _ADAPTERS_DIR)
+
+# 兜底：本技能 adapters 无 endpoint_token.py 的老布局，仍尝试 ct-registry
 if os.path.isdir(os.path.join(_CT_REGISTRY_SKILL, "adapters")):
-    sys.path.insert(0, os.path.join(_CT_REGISTRY_SKILL, "adapters"))
+    _ctr = os.path.join(_CT_REGISTRY_SKILL, "adapters")
+    if _ctr not in sys.path:
+        sys.path.insert(1, _ctr)
 
 # 本技能 scripts/ 也入路径：本地兜底模块（fetch_semantic_scholar 等）内部会
 # 延迟 `from i18n import t`（i18n.py 在 scripts/ 下）——不经 ct_literature 主流程

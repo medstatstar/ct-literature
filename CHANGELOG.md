@@ -3,6 +3,16 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.4.6 (2026-10-13) · 修复网页端 Coze 401（token 模块自包含，v1.4.5 授权门修复的第二层）
+
+> v1.4.5 部署后线上端到端回归实测：AUTH-BLOCK 已消失，但三源仍降级——`[Coze] HTTP 401: Missing authorization header` + `Token 无效或已过期`。授权门放行了，请求却没带 Bearer token 到达 Coze。
+
+- **根因**：`_resolve_token()` 第三级「内嵌公开 blob」依赖 `from endpoint_token import get_token`，而该模块物理上只在 **ct-registry 技能树**（`~/.workbuddy/skills/ct-registry/adapters/`）；`fetch_coze_unified.py` / `pdf_download.py` 均以「运行时把 ct-registry/adapters 插进 sys.path」方式引用。云端部署容器（`/workspace`）没有 ct-registry → import 失败被 except 吞掉 → token 为空 → 无 Authorization header → Coze 401。`pdf_download._resolve_token()`（`coze_resolve.py` 复用同一函数）同款断裂，PDF 直链解析在网页端同样不可用。
+- **修复（发布包自包含，对齐 ct-base / ct-advisor 范式）**：`endpoint_token.py`（XOR+base64 混淆的公共 token blob，ct-base §5.236，设计上即「随技能包发布」）拷入本技能 `adapters/`；两处 sys.path 接线改为**本技能 adapters 目录优先**、ct-registry 降为兜底（老布局兼容）。
+- **实证矩阵**：模拟空 home 容器（无 ct-registry、无 env token）——修复后 `fetch_coze_unified` / `pdf_download` 双模块 token 均非空、`_headers()` 均含 Authorization；本机无退化（Auth header / 授权门 / 私有端点拦截全部保持）。
+- **同步**：`build_publish.py` 重建（77 文件 +1 endpoint_token.py、PRUNED 0 stale、三文件 diff=0）；`py_compile` 四份副本全过。
+- **部署验证**：覆盖发布 `ct-literature.app.workbuddy.host` 后线上 smoke（pembrolizumab NSCLC, max=5, 2025–2026）——待本次 v1.4.6 部署后复跑确认 401/AUTH-BLOCK 双清零。
+
 ## v1.4.5 (2026-10-13) · 修复网页端三源 AUTH-BLOCK 降级（授权门内置公开端点白名单）
 
 > 用户报告网页端（publish-dist 云端部署）EuropePMC / medRxiv / bioRxiv 报 `Coze 失败(AUTH-BLOCK)，降级本地 fetch`；本机 agent / CLI 调用从不复现。

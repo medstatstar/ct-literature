@@ -106,12 +106,21 @@ def _epmc_ratelimit():
 
 
 def _resolve_token() -> str:
-    """token 优先级：env CT_SEARCH_COZE_TOKEN > 动态复用 ct-registry 内嵌公开 blob。"""
+    """token 优先级：env CT_SEARCH_COZE_TOKEN > 本技能内嵌公开 blob > ct-registry 兜底。
+
+    2026-10-13 v1.4.6：endpoint_token.py 自包含于本技能 adapters/（此前仅动态
+    insert ct-registry/adapters，云端部署容器无该技能树 → import 失败 → token
+    为空 → Coze 401，PDF 直链解析在网页端不可用）。先插 ct-registry 再插本目录，
+    最终本目录在 sys.path 最前，本机 / 云端一致。
+    """
     tok = os.environ.get("CT_SEARCH_COZE_TOKEN")
     if tok:
         return tok
     try:
-        sys.path.insert(0, os.path.join(CT_REGISTRY_SKILL, "adapters"))
+        _here = os.path.dirname(os.path.abspath(__file__))
+        for p in (os.path.join(CT_REGISTRY_SKILL, "adapters"), _here):
+            if os.path.isdir(p) and p not in sys.path:
+                sys.path.insert(0, p)
         from endpoint_token import get_token as _gt
         return _gt() or ""
     except Exception:
