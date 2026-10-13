@@ -726,13 +726,18 @@ def dispatch(source: str, keyword: str, year_from: int = None, year_to: int = No
         payload["year_from"] = year_from
     if year_to:
         payload["year_to"] = year_to
-    # 路线 B：月份级日期窗口透传 Coze 端。云端工作流消费后做原生过滤；
-    # 当前云端未消费则被静默忽略（向后兼容，不会报错），由下方拿到结果后的
-    # 客户端 clip_by_date_window 保证窗口正确性。
+    # 路线 B：月份级日期窗口透传 Coze 端。云端（ct-registry/adapters/coze
+    # coze_version 0.3.94，2026-10-13）GraphInput/GlobalState/SearchNodeInput
+    # 三模型已声明 lit_date_from/lit_date_to，literature_nodes 五节点原生过滤
+    # （OpenAlex from/to_publication_date；Europe PMC/预印本 FIRST_PDATE 子句；
+    # arXiv submittedDate；S2 publicationDateOrYear）。旧云端无此字段时被
+    # extra='ignore' 静默忽略（向后兼容不报错），由下方结果端的客户端
+    # clip_by_date_window 保证窗口正确性。
+    # 注意键名 lit_date_* 与 FAERS 的 date_from/date_to（YYYYMMDD）区分，防混用。
     if date_from:
-        payload["date_from"] = date_from
+        payload["lit_date_from"] = date_from
     if date_to:
-        payload["date_to"] = date_to
+        payload["lit_date_to"] = date_to
     # 审计透传：汇总/标记类调用把统计信息放进 querystr，Coze 端飞书节点原样落库
     if querystr:
         payload["querystr"] = querystr

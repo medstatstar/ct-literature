@@ -3,11 +3,11 @@ slug: ct-literature
 name: ct-literature
 displayName: Clinical Trial Literature Search / 临床试验文献检索专家
 cn_name: 临床试验文献检索专家
-version: 1.4.2
+version: 1.4.3
 invocable: true
 summary: 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。集成 Docling PDF 结构化解析。无key亦可使用。
 license: MIT
-description: "Search medical-domain scholarly literature with full data-source coverage (OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize, merge, and de-duplicate the results, produce a qualitative CSM safety-literature subset, and assist in providing open-access (OA) full-text PDF downloads. Usable without a key. / 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。无key亦可使用。"
+description: "Search medical-domain scholarly literature with full data-source coverage (OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv preprints + arXiv methodology breadth), normalize, merge, and de-duplicate the results, produce a qualitative CSM safety-literature subset, and assist in providing open-access (OA) full-text PDF downloads. Integrated Docling PDF structured parsing. Usable without a key. / 全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。集成 Docling PDF 结构化解析。无key亦可使用。"
 triggers:
   - "systematic literature search"
   - "系统文献检索"
@@ -44,7 +44,7 @@ mis-bound paths are permanently retired and the returned `shareLink` must always
 
 ## Language
 
-- **English guide** → [README.md](https://github.com/medstatstar/ct-literature/blob/main/README.md) · **中文指南** → [README_zh-CN.md](https://github.com/medstatstar/ct-literature/blob/main/README_zh-CN.md)
+- **English guide** → [README.md](https://github.com/medstatstar/ct-literature/blob/main/README.md) · **Chinese guide** → [README_zh-CN.md](https://github.com/medstatstar/ct-literature/blob/main/README_zh-CN.md)
 - Bilingual auto-switch: the answer language follows the user's question language (English question → English answer, Chinese question → Chinese answer).
 
 ## Purpose
@@ -70,15 +70,15 @@ Tier matrix, data-protection split, audit notes → [references/capabilities.md]
 ## Features
 
 Core: topic/drug/disease search · review-type & year filters · safety/CSM tagging · multi-source merge+dedupe · citation ranking · MeSH/concepts/funders · structured output (JSON/MD/Excel) · retry+backoff · safe link rendering · citations BibTeX/RIS · PRISMA funnel · doc-type exclusion (`--original-only` / `--only-type`, bidirectional) · relevance scoring · Obsidian/Zotero.
-- **月份级日期窗口（路线 B，2026-10-12）**：`--date-from YYYY-MM-DD` / `--date-to YYYY-MM-DD` / `--recent-months N` 将发表日期下界**原生下推**到 OpenAlex `from_publication_date`、Europe PMC 与 preprints `(FIRST_PDATE:[...])` 查询子句（替代年份级 `Jan-1` 粗粒度；🔴 勿用 `filter=pdates:`，会被 API 静默忽略）；`run()` 合并后另有客户端兜底裁剪（含 year 兜底），保证跨源正确性。用于「仅取最近 N 个月最新论文」。
-- **online/Coze 通道日期窗口（v1.4.2，2026-10-12）**：`dispatch()` 透传 `date_from/date_to` 到 Coze payload 并对返回结果做 `clip_by_date_window` 裁剪；因 Coze 云端工作流暂不按日期过滤（返回老文受 `max_results` 截断），**时效硬保证仍建议 `--offline`/`--local`**，待云端工作流原生消费 date 参数后可切回默认 online。
+- **Month-level date window (route B, 2026-10-12)**: `--date-from YYYY-MM-DD` / `--date-to YYYY-MM-DD` / `--recent-months N` push the publication-date lower bound **natively down** into the OpenAlex `from_publication_date`, Europe PMC and preprint `(FIRST_PDATE:[...])` query clauses (replacing the coarse year-level `Jan-1` granularity; 🔴 never use `filter=pdates:` — the API silently ignores it); after merging, `run()` applies an additional client-side clipping fallback (including a year fallback) to guarantee cross-source correctness. Use it for "recent N months only" queries.
+- **online/Coze channel date window (v1.4.2 client + v1.4.3 cloud, 2026-10-12/13)**: `dispatch()` passes `lit_date_from/lit_date_to` through to the Coze payload and clips returned results with `clip_by_date_window`. The cloud side (`ct-registry/adapters/coze`, COZE_VERSION **0.3.94**) now declares `lit_date_from/lit_date_to` in all three schema models and filters natively in all five literature nodes (OpenAlex `from/to_publication_date`; Europe PMC + preprints `(FIRST_PDATE:[lo TO hi])`; arXiv `submittedDate`; S2 `publicationDateOrYear`), plus fixes the europepmc empty-`publication_date` root cause (`firstPublicationDate` top-level field, aligning with the local 2026-09-08 BUGFIX). **Native online filtering takes effect only after the cloud 0.3.94 bundle is deployed** (manual Coze-platform release); until then `--offline`/`--local` remains the hard recency guarantee, and the client-side clip keeps correctness against the un-upgraded cloud.
 
 Anti-hallucination: **P0 citation verification** (`--verify`, §17.1) · **P1 DOI audit** (`--verify-dois`) · **P0 evidence provenance log**.
 Full capability table (per-feature flags & semantics) → [references/capabilities.md](references/capabilities.md).
 
-### Retrieval structure model (2026-09-30, adapted from the 组小学 expert · P0/P1)
+### Retrieval structure model (2026-09-30, adapted from the `tencent-lit-search` expert · P0/P1)
 
-Ported 组小学's (tencent-lit-search) auditable retrieval structure to ct-literature — all **additive, backward-compatible** (no new flag = identical old behavior):
+Ported the `tencent-lit-search` expert's auditable retrieval structure to ct-literature — all **additive, backward-compatible** (no new flag = identical old behavior):
 
 - **Structured PICO concepts `--concept TYPE=VALUE`** (repeatable): `TYPE∈{condition,population,intervention,comparator,outcome,endpoint,study_design,biomarker,drug,indication}`. Concepts are AND-combined into the query, with intervention / comparator / outcome on separate axes (no longer all crammed into `--topic`); each concept is MeSH-normalized and its `mapping_status` recorded (`exact_label` / `synonym` / `unmapped_literal`; fuzzy matches are rejected and literal terms are never fabricated).
 - **Retrieval depth budget `--depth quick|standard|deep`**: per-source cap + whether to trigger weak-result rescue (`quick` never rescues; `standard`/`deep` do). Not an evidence-quality rating.
@@ -86,7 +86,7 @@ Ported 组小学's (tencent-lit-search) auditable retrieval structure to ct-lite
 - **Four-state audit ledger + coverage verdict**: evidence-log adds `status∈{ok,empty,error,skipped}` and `coverage∈{healthy,partial,empty,critical_gap}`; explicitly-disabled sources are logged as `skipped` (not_run); gaps are surfaced honestly, never zeroed; OpenAlex failure → `critical_gap` with a warning against extrapolation.
 - **Weak-result rescue (P1-6)**: when `standard`/`deup` and unique merged works < 5 and concepts had narrowed the query, automatically re-run with a broader query (topic only); single-shot, non-fatal; logs `skipped` if nothing new is added.
 
-> What is NOT ported: 组小学's 7-scenario exhaustive set / first-class trial·drug·target objects / target-gene-variation entities — these fall outside ct-literature's clinical-literature scope and would overlap with ct-registry / ct-safety, so they are deliberately excluded.
+> What is NOT ported: the `tencent-lit-search` expert's 7-scenario exhaustive set / first-class trial·drug·target objects / target-gene-variation entities — these fall outside ct-literature's clinical-literature scope and would overlap with ct-registry / ct-safety, so they are deliberately excluded.
 
 ## Unified work schema
 
@@ -113,7 +113,7 @@ Full output catalogue, sheet layout, server-side supplement chain, concurrency n
 ## Implementation
 
 Primary entry: `python scripts/ct_literature.py --topic "<query>" [--review-type …] [--year-from …] [--safety] [--cochrane] [--sources "OpenAlex,EuropePMC"] [--with-guidelines] --run --out-dir ./out` (omit `--run` = SAFE PREVIEW). Guidelines corpus build: `python adapters/build_guidelines.py --topic <topic> --run`.
-**日期窗口（路线 B）**：加 `--recent-months 1`（或 `--date-from 2026-09-12 --date-to 2026-10-12`）即仅取最近 1 个月发表；日期级参数优先于年份级 `--year-from`，原生下推到各源 API，合并后客户端兜底裁剪（复用 `clip_by_date_window`，含 year 兜底）。online/Coze 通道亦透传 date 并对返回裁剪，但受云端未原生过滤影响，近期文献可能被 `max_results` 截断漏掉（实测 openalex/biorxiv 裁后归零），**时效硬保证用 `--offline`**。
+**Date window (route B)**: add `--recent-months 1` (or `--date-from 2026-09-12 --date-to 2026-10-12`) to keep only papers published in the last month; date-level parameters take precedence over the year-level `--year-from`, are pushed natively down into every source API, and are clipped client-side after merging (reusing `clip_by_date_window`, including the year fallback). The online/Coze channel also passes `date` through and clips the response, but since the cloud does not filter natively, recent papers can still be truncated away by `max_results` (measured: openalex/biorxiv clipped to zero) — **use `--offline` for a hard recency guarantee**.
 Invocation cookbook (worked examples, `--sources` semantics, OpenAlex key setup) → [references/capabilities.md](references/capabilities.md).
 
 ## Errors
@@ -139,12 +139,12 @@ A cross-database planning layer (Embase / Cochrane / Web of Science + preprint T
 
 ## PDF Parsing Enhancement (Docling · v1.3.0)
 
-> **Docling** (`github.com/docling-project/docling`）：IBM 开源的文档结构化解析器。方案、IB、CSR 等 PDF 里大量表格，普通解析器一转就散架。Docling 保住表格结构和章节层级，是把法规文档接进 RAG 问答前最关键的一道预处理。
+> **Docling** (`github.com/docling-project/docling`): IBM's open-source document structure parser. Protocol, IB and CSR PDFs are dense with tables that ordinary parsers shred on conversion. Docling preserves table structure and section hierarchy — the single most important preprocessing step before feeding regulatory documents into RAG question answering.
 
-- 安装：`pip install docling`
-- 调用：`DocumentConverter().convert('paper.pdf')` 输出带层级结构的 Markdown/JSON
-- 与现有 PDF 流水线互补：Docling 优先解析（保表格结构），失败时回退到 PyMuPDF/PdfPlumber
-- 适用场景：CT.gov 方案 PDF、EU-CTR 文档 PDF、OA 全文 PDF 的结构化解析
+- Install: `pip install docling`
+- Call: `DocumentConverter().convert('paper.pdf')` emits Markdown/JSON with hierarchical structure
+- Complements the existing PDF pipeline: Docling parses first (preserving table structure), falling back to PyMuPDF/PdfPlumber on failure
+- Use cases: structured parsing of CT.gov protocol PDFs, EU-CTR document PDFs and OA full-text PDFs
 
 ## Natural-Language Dialogue — Triage-First (mandatory)
 

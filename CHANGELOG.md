@@ -3,6 +3,18 @@
 All notable changes to this skill are documented here. Versioning follows the
 ct- library convention (A-tier public-intel skill — non-confidential input per ct-base §11, semver-ish).
 
+## v1.4.3 (2026-10-13) · 云端原生日期过滤落地（ct-registry coze 0.3.94 联动 + lit_date_* 契约对齐）
+
+> 用户指认云端代码位置 `ct-registry/adapters/coze`，根治 v1.4.2 遗留的 online 结构性局限：客户端只砍不补、europepmc 空日期。
+
+- **云端源码定位**：ct-search.coze.site 的服务端代码位于 `ct-registry/adapters/coze/src/`（`literature_nodes.py` 即文献检索节点，`search_node.py` 按 source 路由原样透传 state）——此前误判「源码不在本地」实为未找到。
+- **云端根因 1（入口静默丢弃）**：`GraphInput`/`GlobalState`/`SearchNodeInput` 三模型均未声明文献日期字段，v1.4.2 透传的 `date_from/date_to` 在入口即被 `extra='ignore'` 丢弃（与 2026-10-08 FAERS 同款坑）。云端已补 `lit_date_from`/`lit_date_to`（YYYY-MM-DD，三模型同声明；与 FAERS 的 YYYYMMDD `date_from/date_to` 独立命名防混用）。
+- **云端根因 2（europepmc 空日期）**：云端 `europepmc_node` 从顶层取 `printPublicationDate`/`dateOfPublication`，而二者嵌在 `journalInfo` 下、顶层恒空串 → `publication_date` 全空。已对齐本地 2026-09-08 BUGFIX 改 `firstPublicationDate`（顶层真源）优先。
+- **云端五节点原生过滤（date 优先、year 回退、老客户端逐字不变）**：OpenAlex `from/to_publication_date:YYYY-MM-DD`；Europe PMC 与预印本 `(FIRST_PDATE:[lo TO hi])` 查询子句（沿用本地 2026-10-12 实证：`filter=pdates` 被 API 静默忽略）；arXiv `submittedDate:[YYYYMMDD TO YYYYMMDD]`；S2 `publicationDateOrYear`。COZE_VERSION 0.3.93 → **0.3.94**。
+- **本技能侧改动**：`fetch_coze_unified.dispatch()` payload 键名 `date_from/date_to` → **`lit_date_from/lit_date_to`**（与云端契约对齐；签名与 CLI 保持 `date_from/date_to` 不变）。`clip_by_date_window()` 客户端兜底保留——云端未部署 0.3.94 前仍靠它保正确性。
+- **向后兼容实证**：旧云端（0.3.93）收到 `lit_date_*` 被静默忽略不报错，客户端裁剪兜底生效（online 冒烟通过）。
+- **生效前提**：online 模式原生日期过滤需云端部署 coze 0.3.94（Coze 平台人工发布）；部署前周报继续用 `--offline` 保时效硬保证。云端验证：selfcheck 44/44 + 三模型穿透/各源检索式/date 优先/year 回退 11 项全过。
+
 ## v1.4.2 (2026-10-12) · online/Coze 通道日期窗口支持（透传 + 客户端裁剪 + year 兜底）
 
 > 用户反馈「切勿用 --online/Coze 模式，直接修改 coze 代码支持即可」——让默认 online 通道也支持月份级日期窗口，而非在调用方规避。
